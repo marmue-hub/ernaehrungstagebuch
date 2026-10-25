@@ -3,7 +3,7 @@ import io
 from datetime import datetime, timedelta
 from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -67,16 +67,33 @@ def create_user(payload: schemas.UserCreate, db: Session = Depends(get_db)):
     return user
 
 
+def resolve_user_id(db: Session, user_id: int | None = None) -> int:
+    if user_id is not None:
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        if user is None:
+            raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
+        return user.id
+
+    user = db.query(models.User).order_by(models.User.id.asc()).first()
+    if user is None:
+        raise HTTPException(status_code=400, detail="Kein Benutzer vorhanden")
+    return user.id
+
+
 @app.get("/api/meals", response_model=List[schemas.MealOut])
-def get_meals(db: Session = Depends(get_db)):
-    return db.query(models.Meal).order_by(models.Meal.eaten_at.desc()).all()
+def get_meals(user_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+    query = db.query(models.Meal)
+    if user_id is not None:
+        query = query.filter(models.Meal.user_id == user_id)
+    return query.order_by(models.Meal.eaten_at.desc()).all()
 
 
 @app.post("/api/meals", response_model=schemas.MealOut, status_code=status.HTTP_201_CREATED)
 def create_meal(payload: schemas.MealCreate, db: Session = Depends(get_db)):
+    user_id = resolve_user_id(db, payload.user_id)
     now = datetime.utcnow()
     meal = models.Meal(
-        user_id=1,
+        user_id=user_id,
         name=payload.name,
         eaten_at=payload.eaten_at,
         notes=payload.notes,
@@ -90,18 +107,25 @@ def create_meal(payload: schemas.MealCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/api/symptoms", response_model=List[schemas.SymptomOut])
-def get_symptoms(db: Session = Depends(get_db)):
-    return db.query(models.Symptom).order_by(models.Symptom.timestamp.desc()).all()
+def get_symptoms(user_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+    query = db.query(models.Symptom)
+    if user_id is not None:
+        query = query.filter(models.Symptom.user_id == user_id)
+    return query.order_by(models.Symptom.timestamp.desc()).all()
 
 
 @app.post("/api/symptoms", response_model=schemas.SymptomOut, status_code=status.HTTP_201_CREATED)
 def create_symptom(payload: schemas.SymptomCreate, db: Session = Depends(get_db)):
+    user_id = resolve_user_id(db, payload.user_id)
+    now = datetime.utcnow()
     symptom = models.Symptom(
-        user_id=1,
+        user_id=user_id,
         meal_id=payload.meal_id,
         type=payload.type,
         value=payload.value,
         timestamp=payload.timestamp,
+        created_at=now,
+        updated_at=now,
     )
     db.add(symptom)
     db.commit()
@@ -110,16 +134,23 @@ def create_symptom(payload: schemas.SymptomCreate, db: Session = Depends(get_db)
 
 
 @app.get("/api/wellbeing", response_model=List[schemas.WellbeingOut])
-def get_wellbeing(db: Session = Depends(get_db)):
-    return db.query(models.WellbeingEntry).order_by(models.WellbeingEntry.timestamp.desc()).all()
+def get_wellbeing(user_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+    query = db.query(models.WellbeingEntry)
+    if user_id is not None:
+        query = query.filter(models.WellbeingEntry.user_id == user_id)
+    return query.order_by(models.WellbeingEntry.timestamp.desc()).all()
 
 
 @app.post("/api/wellbeing", response_model=schemas.WellbeingOut, status_code=status.HTTP_201_CREATED)
 def create_wellbeing(payload: schemas.WellbeingCreate, db: Session = Depends(get_db)):
+    user_id = resolve_user_id(db, payload.user_id)
+    now = datetime.utcnow()
     entry = models.WellbeingEntry(
-        user_id=1,
+        user_id=user_id,
         value=payload.value,
         timestamp=payload.timestamp,
+        created_at=now,
+        updated_at=now,
     )
     db.add(entry)
     db.commit()
@@ -148,8 +179,11 @@ def build_reminder_entries_for_meal(meal: models.Meal):
 
 
 @app.get("/api/reminders", response_model=List[schemas.ReminderOut])
-def get_reminders(db: Session = Depends(get_db)):
-    meals = db.query(models.Meal).order_by(models.Meal.eaten_at.asc()).all()
+def get_reminders(user_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+    query = db.query(models.Meal)
+    if user_id is not None:
+        query = query.filter(models.Meal.user_id == user_id)
+    meals = query.order_by(models.Meal.eaten_at.asc()).all()
     reminders = []
     for meal in meals:
         reminders.extend(build_reminder_entries_for_meal(meal))
@@ -162,23 +196,110 @@ def create_reminder(db: Session = Depends(get_db)):
 
 
 @app.get("/api/export/csv")
-def export_csv(db: Session = Depends(get_db)):
-    meals = db.query(models.Meal).order_by(models.Meal.eaten_at.desc()).all()
+def export_csv(user_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+    meals_query = db.query(models.Meal)
+    symptoms_query = db.query(models.Symptom)
+    wellbeing_query = db.query(models.WellbeingEntry)
+
+    if user_id is not None:
+        meals_query = meals_query.filter(models.Meal.user_id == user_id)
+        symptoms_query = symptoms_query.filter(models.Symptom.user_id == user_id)
+        wellbeing_query = wellbeing_query.filter(models.WellbeingEntry.user_id == user_id)
+
+    meals = meals_query.order_by(models.Meal.eaten_at.desc()).all()
+    symptoms = symptoms_query.order_by(models.Symptom.timestamp.desc()).all()
+    wellbeing_entries = wellbeing_query.order_by(models.WellbeingEntry.timestamp.desc()).all()
+
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["id", "name", "eaten_at", "notes", "created_at", "updated_at"])
+    writer.writerow([
+        "record_type",
+        "id",
+        "user_id",
+        "meal_name",
+        "meal_eaten_at",
+        "meal_notes",
+        "meal_created_at",
+        "meal_updated_at",
+        "symptom_type",
+        "symptom_value",
+        "symptom_timestamp",
+        "symptom_created_at",
+        "symptom_updated_at",
+        "wellbeing_value",
+        "wellbeing_timestamp",
+        "wellbeing_created_at",
+        "wellbeing_updated_at",
+    ])
 
     for meal in meals:
         writer.writerow([
+            "meal",
             meal.id,
+            meal.user_id,
             meal.name,
-            meal.eaten_at.isoformat() if hasattr(meal.eaten_at, "isoformat") else meal.eaten_at,
+            isoformat_or_value(meal.eaten_at),
             meal.notes or "",
-            meal.created_at.isoformat() if hasattr(meal.created_at, "isoformat") else meal.created_at,
-            meal.updated_at.isoformat() if hasattr(meal.updated_at, "isoformat") else meal.updated_at,
+            isoformat_or_value(meal.created_at),
+            isoformat_or_value(meal.updated_at),
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+        ])
+
+    for symptom in symptoms:
+        writer.writerow([
+            "symptom",
+            symptom.id,
+            symptom.user_id,
+            "",
+            "",
+            "",
+            "",
+            "",
+            symptom.type,
+            symptom.value,
+            isoformat_or_value(symptom.timestamp),
+            isoformat_or_value(symptom.created_at),
+            isoformat_or_value(symptom.updated_at),
+            "",
+            "",
+            "",
+            "",
+        ])
+
+    for entry in wellbeing_entries:
+        writer.writerow([
+            "wellbeing",
+            entry.id,
+            entry.user_id,
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            entry.value,
+            isoformat_or_value(entry.timestamp),
+            isoformat_or_value(entry.created_at),
+            isoformat_or_value(entry.updated_at),
         ])
 
     content = output.getvalue()
     return Response(content=content, media_type="text/csv", headers={
         "Content-Disposition": "attachment; filename=ernaehrungstagebuch-export.csv"
     })
+
+
+def isoformat_or_value(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value

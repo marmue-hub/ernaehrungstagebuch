@@ -40,6 +40,8 @@ class Symptom(Base):
     type = Column(String(50), nullable=False)
     value = Column(Integer, nullable=False)
     timestamp = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
 
     user = relationship("User", back_populates="symptoms")
 
@@ -51,5 +53,7 @@ class WellbeingEntry(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     value = Column(Integer, nullable=False)
     timestamp = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
 
     user = relationship("User", back_populates="wellbeing_entries")

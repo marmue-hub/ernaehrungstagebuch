@@ -7,10 +7,12 @@ Eine lokale iPhone-freundliche PWA mit React Frontend, FastAPI Backend und Postg
 - Frontend: React + Vite
 - Backend: FastAPI
 - Datenbank: PostgreSQL
-- Reverse Proxy: Caddy
+- Reverse Proxy: Nginx (server-side, admin-konfiguriert)
 - Deployment: Docker Compose
 
 ## Lokale Entwicklung
+
+Für die lokale Entwicklung bleibt der direkte Zugriff ohne Caddy aktiv. Das bedeutet:
 
 ```bash
 docker compose up --build
@@ -20,7 +22,8 @@ Danach erreichbar:
 
 - Frontend: http://localhost:5173
 - Backend API: http://localhost:8000/docs
-- Domain: http://wiegehts.x73.eu
+
+Im Heimnetzwerk bzw. auf dem Server wird die externe Route über Nginx abgewickelt, z. B. über die von dem Admin bereits gepflegte Domain-Konfiguration.
 
 ## GitHub
 
