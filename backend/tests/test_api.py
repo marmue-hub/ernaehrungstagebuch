@@ -141,3 +141,44 @@ def test_import_csv_imports_exported_records():
 
     wellbeing = client.get(f'/api/wellbeing?user_id={recipient["id"]}')
     assert wellbeing.json()[0]['value'] == 2
+
+
+def test_import_csv_does_not_duplicate_existing_records():
+    user = client.post('/api/users', json={'username': 'importer_repeat'}).json()
+
+    client.post('/api/meals', json={
+        'user_id': user['id'],
+        'name': 'Frühstück',
+        'eaten_at': datetime(2026, 10, 25, 8, 0, tzinfo=timezone.utc).isoformat(),
+        'notes': 'Frisch',
+    })
+    client.post('/api/symptoms', json={
+        'user_id': user['id'],
+        'type': 'bauchweh',
+        'value': 3,
+        'timestamp': datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc).isoformat(),
+    })
+    client.post('/api/wellbeing', json={
+        'user_id': user['id'],
+        'value': 2,
+        'timestamp': datetime(2026, 10, 25, 10, 0, tzinfo=timezone.utc).isoformat(),
+    })
+
+    export_response = client.get(f'/api/export/csv?user_id={user["id"]}')
+    assert export_response.status_code == 200, export_response.text
+    csv_content = export_response.text
+
+    response = client.post(
+        f'/api/import/csv?user_id={user["id"]}',
+        files={'file': ('export.csv', csv_content, 'text/csv')},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['imported']['meals'] == 0
+    assert payload['imported']['symptoms'] == 0
+    assert payload['imported']['wellbeing'] == 0
+
+    assert len(client.get(f'/api/meals?user_id={user["id"]}').json()) == 1
+    assert len(client.get(f'/api/symptoms?user_id={user["id"]}').json()) == 1
+    assert len(client.get(f'/api/wellbeing?user_id={user["id"]}').json()) == 1

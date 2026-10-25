@@ -351,10 +351,22 @@ def import_csv(
             if not meal_name:
                 continue
 
+            meal_timestamp = normalize_import_datetime(
+                row.get("timestamp_local") or row.get("timestamp_utc") or row.get("meal_eaten_at")
+            )
+            meal_notes = normalize_import_text(row.get("notes") or row.get("meal_notes") or "")
+            existing_meals = db.query(models.Meal).filter(
+                models.Meal.user_id == target_user_id,
+                models.Meal.name == meal_name,
+                models.Meal.eaten_at == meal_timestamp,
+            ).all()
+            if any(is_normalized_match(meal.notes, meal_notes) for meal in existing_meals):
+                continue
+
             meal = models.Meal(
                 user_id=target_user_id,
                 name=meal_name,
-                eaten_at=parse_csv_datetime(row.get("timestamp_local") or row.get("timestamp_utc") or row.get("meal_eaten_at")),
+                eaten_at=meal_timestamp,
                 notes=(row.get("notes") or row.get("meal_notes") or "") or None,
                 created_at=parse_csv_datetime(row.get("created_at") or row.get("meal_created_at")),
                 updated_at=parse_csv_datetime(row.get("updated_at") or row.get("meal_updated_at")),
@@ -368,11 +380,23 @@ def import_csv(
             if not symptom_type or not symptom_value_raw:
                 continue
 
+            symptom_timestamp = normalize_import_datetime(
+                row.get("timestamp_local") or row.get("timestamp_utc") or row.get("symptom_timestamp")
+            )
+            symptom_value = int(symptom_value_raw)
+            existing_symptoms = db.query(models.Symptom).filter(
+                models.Symptom.user_id == target_user_id,
+                models.Symptom.value == symptom_value,
+                models.Symptom.timestamp == symptom_timestamp,
+            ).all()
+            if any(is_normalized_match(symptom.type, symptom_type) for symptom in existing_symptoms):
+                continue
+
             symptom = models.Symptom(
                 user_id=target_user_id,
                 type=symptom_type,
-                value=int(symptom_value_raw),
-                timestamp=parse_csv_datetime(row.get("timestamp_local") or row.get("timestamp_utc") or row.get("symptom_timestamp")),
+                value=symptom_value,
+                timestamp=symptom_timestamp,
                 created_at=parse_csv_datetime(row.get("created_at") or row.get("symptom_created_at")),
                 updated_at=parse_csv_datetime(row.get("updated_at") or row.get("symptom_updated_at")),
             )
@@ -384,10 +408,22 @@ def import_csv(
             if not wellbeing_value_raw:
                 continue
 
+            wellbeing_timestamp = normalize_import_datetime(
+                row.get("timestamp_local") or row.get("timestamp_utc") or row.get("wellbeing_timestamp")
+            )
+            wellbeing_value = int(wellbeing_value_raw)
+            existing_wellbeing = db.query(models.WellbeingEntry).filter(
+                models.WellbeingEntry.user_id == target_user_id,
+                models.WellbeingEntry.value == wellbeing_value,
+                models.WellbeingEntry.timestamp == wellbeing_timestamp,
+            ).first()
+            if existing_wellbeing is not None:
+                continue
+
             entry = models.WellbeingEntry(
                 user_id=target_user_id,
-                value=int(wellbeing_value_raw),
-                timestamp=parse_csv_datetime(row.get("timestamp_local") or row.get("timestamp_utc") or row.get("wellbeing_timestamp")),
+                value=wellbeing_value,
+                timestamp=wellbeing_timestamp,
                 created_at=parse_csv_datetime(row.get("created_at") or row.get("wellbeing_created_at")),
                 updated_at=parse_csv_datetime(row.get("updated_at") or row.get("wellbeing_updated_at")),
             )
@@ -428,6 +464,21 @@ def parse_csv_datetime(value):
         normalized = normalized[:-1] + "+00:00"
 
     return datetime.fromisoformat(normalized)
+
+
+def normalize_import_datetime(value):
+    parsed = parse_csv_datetime(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).replace(microsecond=0)
+
+
+def normalize_import_text(value):
+    return (value or "").strip().lower()
+
+
+def is_normalized_match(left, right):
+    return normalize_import_text(left) == normalize_import_text(right)
 
 
 def isoformat_or_value(value):
