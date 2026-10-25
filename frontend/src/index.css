@@ -1,0 +1,115 @@
+:root {
+  font-family: Inter, system-ui, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  background: #f2f7f4;
+  color: #1f2d25;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #edf7f0 0%, #f9fcfa 100%);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  border: none;
+  border-radius: 10px;
+  background: #2f7d5a;
+  color: white;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #25694d;
+}
+
+.app-shell {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.topbar {
+  background: #2f7d5a;
+  color: white;
+  padding: 1rem 1.25rem;
+  border-radius: 12px;
+  margin-bottom: 1rem;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.content {
+  display: grid;
+  gap: 1rem;
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #dfece4;
+  border-radius: 14px;
+  padding: 1rem;
+  box-shadow: 0 2px 10px rgba(47, 125, 90, 0.08);
+}
+
+.card h2 {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.row,
+.stack {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.stack {
+  flex-direction: column;
+}
+
+.row input,
+.stack input,
+.stack select {
+  flex: 1;
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+  border: 1px solid #cfe0d5;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+ul {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.status {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  background: #e6f4eb;
+  color: #1d5b40;
+}

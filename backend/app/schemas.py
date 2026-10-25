@@ -1,0 +1,69 @@
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class UserCreate(BaseModel):
+    username: str = Field(..., min_length=2, max_length=100)
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    display_name: Optional[str] = None
+    created_at: datetime
+
+
+class MealCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    eaten_at: datetime
+    notes: Optional[str] = None
+
+
+class MealOut(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    eaten_at: datetime
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class SymptomCreate(BaseModel):
+    meal_id: Optional[int] = None
+    type: str
+    value: int = Field(..., ge=1, le=5)
+    timestamp: datetime
+
+
+class SymptomOut(BaseModel):
+    id: int
+    user_id: int
+    meal_id: Optional[int]
+    type: str
+    value: int
+    timestamp: datetime
+
+
+class WellbeingCreate(BaseModel):
+    value: int = Field(..., ge=1, le=3)
+    timestamp: datetime
+
+
+class WellbeingOut(BaseModel):
+    id: int
+    user_id: int
+    value: int
+    timestamp: datetime
+
+
+class ReminderOut(BaseModel):
+    id: int
+    user_id: int
+    meal_id: int
+    reminder_type: str
+    scheduled_at: datetime
+    status: str
+    sent_at: Optional[datetime] = None

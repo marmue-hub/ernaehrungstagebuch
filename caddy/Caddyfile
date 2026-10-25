@@ -1,0 +1,9 @@
+wiegehts.x73.eu {
+    @api path /api/*
+    reverse_proxy @api backend:8000
+    reverse_proxy frontend:5173
+}
+
+:80 {
+    reverse_proxy frontend:5173
+}
