@@ -1,0 +1,17 @@
+{
+  "name": "Ernährungstagebuch",
+  "short_name": "Ernährung",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#eafaf0",
+  "theme_color": "#2f9a45",
+  "description": "Tagebuch für Essen, Gefühle und Wohlbefinden.",
+  "icons": [
+    {
+      "src": "/ernaehrungstagebuch-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

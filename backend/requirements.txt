@@ -5,3 +5,4 @@ psycopg[binary]==3.3.6
 pydantic==2.8.2
 pydantic-settings==2.3.4
 python-dotenv==1.0.1
+python-multipart==0.0.20

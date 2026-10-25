@@ -212,6 +212,10 @@ function App() {
     isOffline: false,
   });
 
+  const activeUserName = selectedUserId
+    ? users.find((item) => item.id === selectedUserId)?.username || user
+    : user;
+
   const fetchUsers = async () => {
     try {
       const response = await fetch(`${API_URL}/api/users`);
@@ -545,22 +549,28 @@ function App() {
     },
   ];
 
-  const handleExportCsv = async () => {
+  const handleExportCsv = async (exportType = 'clinical') => {
     try {
-      const exportUrl = selectedUserId ? `${API_URL}/api/export/csv?user_id=${selectedUserId}` : `${API_URL}/api/export/csv`;
+      const baseUrl = selectedUserId
+        ? `${API_URL}/api/export/csv?user_id=${selectedUserId}`
+        : `${API_URL}/api/export/csv`;
+      const exportUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}export_type=${encodeURIComponent(exportType)}`;
       const response = await fetch(exportUrl);
       if (!response.ok) throw new Error('Export fehlgeschlagen');
 
       const blob = await response.blob();
-      const downloadUrl = URL.createObjectURL(blob);
+      const exportBlobUrl = URL.createObjectURL(blob);
+      const fileName = exportType === 'clinical'
+        ? 'ernaehrungstagebuch-arzt-berater-export.csv'
+        : 'ernaehrungstagebuch-export.csv';
       const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = 'ernaehrungstagebuch-export.csv';
+      link.href = exportBlobUrl;
+      link.download = fileName;
       document.body.appendChild(link);
       link.click();
       link.remove();
-      URL.revokeObjectURL(downloadUrl);
-      setStatus('CSV exportiert');
+      URL.revokeObjectURL(exportBlobUrl);
+      setStatus(exportType === 'clinical' ? 'Arzt-/Berater-Export erstellt' : 'CSV exportiert');
     } catch (error) {
       setStatus(error.message);
     }
@@ -574,10 +584,36 @@ function App() {
     event.target.value = '';
   };
 
+  const averageSymptomValue = symptoms.length
+    ? (symptoms.reduce((sum, item) => sum + Number(item.value || 0), 0) / symptoms.length).toFixed(1)
+    : '0.0';
+
+  const symptomBreakdown = Object.entries(
+    symptoms.reduce((accumulator, item) => {
+      const key = item.type || 'unbekannt';
+      accumulator[key] = (accumulator[key] || 0) + 1;
+      return accumulator;
+    }, {})
+  ).sort((a, b) => b[1] - a[1]);
+
+  const mostFrequentSymptom = symptomBreakdown[0]
+    ? `${symptomTypeMeta[symptomBreakdown[0][0]]?.label || symptomBreakdown[0][0]} (${symptomBreakdown[0][1]}x)`
+    : 'Keine Symptome';
+
+  const latestWellbeing = wellbeing[0];
+  const latestMeal = meals[0];
+  const recentMealNames = meals.slice(0, 3).map((meal) => meal.name).join(', ') || 'Keine Mahlzeiten';
+  const trackingDays = new Set(
+    [...meals, ...symptoms, ...wellbeing].map((item) => new Date(item.eaten_at || item.timestamp).toISOString().slice(0, 10))
+  ).size;
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <h1>Ernährungstagebuch</h1>
+        <div className="topbar-row">
+          <h1>Ernährungstagebuch</h1>
+          {activeUserName && <span className="header-user-pill">{activeUserName}</span>}
+        </div>
         <nav className="tab-bar" aria-label="Hauptnavigation">
           {[
             { id: 'start', label: 'Start' },
@@ -635,11 +671,6 @@ function App() {
                   ))}
                 </select>
 
-                {selectedUserId && (
-                  <div className="user-chip-wrap">
-                    <span className="user-chip">Aktiv: {users.find((item) => item.id === selectedUserId)?.username || user}</span>
-                  </div>
-                )}
               </div>
 
               <div className="row user-creator-row">
@@ -769,29 +800,72 @@ function App() {
         )}
 
         {activeTab === 'history' && (
-          <section className="card">
-            <h2>Verlauf & Export</h2>
-            <div className="sync-banner">
-              <span className={syncInfo.isOffline ? 'sync-status offline' : 'sync-status online'}>
-                {syncInfo.isOffline
-                  ? `${syncInfo.pendingChanges} Änderung(en) warten auf Synchronisierung`
-                  : syncInfo.lastSyncAt
-                    ? `Letzte Synchronisierung: ${formatDateTimeBerlin(syncInfo.lastSyncAt)}`
-                    : 'Noch keine Synchronisierung'}
-              </span>
-              <button type="button" className="sync-button" onClick={syncQueuedEntries}>
-                Jetzt synchronisieren
-              </button>
-            </div>
-            <div className="history-actions">
-              <button type="button" onClick={handleExportCsv}>CSV exportieren</button>
-              <label className="import-button">
-                CSV importieren
-                <input type="file" accept=".csv,text/csv" onChange={handleImportCsv} />
-              </label>
-            </div>
+          <>
+            <section className="card clinical-card">
+              <h2>Arzt-/Berater-Ansicht</h2>
+              <div className="clinical-grid">
+                <div className="clinical-metric">
+                  <span className="clinical-label">Einträge</span>
+                  <strong>{meals.length + symptoms.length + wellbeing.length}</strong>
+                </div>
+                <div className="clinical-metric">
+                  <span className="clinical-label">Durchschnittliche Symptomstärke</span>
+                  <strong>{averageSymptomValue}</strong>
+                </div>
+                <div className="clinical-metric">
+                  <span className="clinical-label">Häufigstes Symptom</span>
+                  <strong>{mostFrequentSymptom}</strong>
+                </div>
+                <div className="clinical-metric">
+                  <span className="clinical-label">Letztes Wohlbefinden</span>
+                  <strong>{latestWellbeing ? `${wellbeingLabels[latestWellbeing.value] || latestWellbeing.value}` : 'Keine Daten'}</strong>
+                </div>
+              </div>
 
-            <div className="summary-grid">
+              <div className="clinical-detail-list">
+                <div>
+                  <span className="clinical-label">Aktuelle Mahlzeiten</span>
+                  <p>{recentMealNames}</p>
+                </div>
+                <div>
+                  <span className="clinical-label">Letzte Mahlzeit</span>
+                  <p>{latestMeal ? `${latestMeal.name} · ${formatDateTimeBerlin(latestMeal.eaten_at)}` : 'Keine Mahlzeiten'}</p>
+                </div>
+                <div>
+                  <span className="clinical-label">Erfassungs-Tage</span>
+                  <p>{trackingDays}</p>
+                </div>
+              </div>
+            </section>
+
+            <section className="card">
+              <h2>Verlauf & Export</h2>
+              <div className="sync-banner">
+                <span className={syncInfo.isOffline ? 'sync-status offline' : 'sync-status online'}>
+                  {syncInfo.isOffline
+                    ? `${syncInfo.pendingChanges} Änderung(en) warten auf Synchronisierung`
+                    : syncInfo.lastSyncAt
+                      ? `Letzte Synchronisierung: ${formatDateTimeBerlin(syncInfo.lastSyncAt)}`
+                      : 'Noch keine Synchronisierung'}
+                </span>
+                <button type="button" className="sync-button" onClick={syncQueuedEntries}>
+                  Jetzt synchronisieren
+                </button>
+              </div>
+              <div className="history-actions">
+                <button type="button" onClick={() => handleExportCsv('clinical')}>
+                  Arzt-/Berater-Export
+                </button>
+                <button type="button" onClick={() => handleExportCsv('standard')}>
+                  Standard-CSV exportieren
+                </button>
+                <label className="import-button">
+                  CSV importieren
+                  <input type="file" accept=".csv,text/csv" onChange={handleImportCsv} />
+                </label>
+              </div>
+
+              <div className="summary-grid">
               <div>
                 <h3>Mahlzeiten</h3>
                 <ul>
@@ -831,6 +905,7 @@ function App() {
               </div>
             </div>
           </section>
+          </>
         )}
 
         {status && <p className="status">{status}</p>}

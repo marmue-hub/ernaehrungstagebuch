@@ -1,9 +1,9 @@
 import csv
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -196,7 +196,11 @@ def create_reminder(db: Session = Depends(get_db)):
 
 
 @app.get("/api/export/csv")
-def export_csv(user_id: int | None = Query(default=None), db: Session = Depends(get_db)):
+def export_csv(
+    user_id: int | None = Query(default=None),
+    export_type: str = Query(default="clinical"),
+    db: Session = Depends(get_db),
+):
     meals_query = db.query(models.Meal)
     symptoms_query = db.query(models.Symptom)
     wellbeing_query = db.query(models.WellbeingEntry)
@@ -210,95 +214,220 @@ def export_csv(user_id: int | None = Query(default=None), db: Session = Depends(
     symptoms = symptoms_query.order_by(models.Symptom.timestamp.desc()).all()
     wellbeing_entries = wellbeing_query.order_by(models.WellbeingEntry.timestamp.desc()).all()
 
+    normalized_export_type = (export_type or "clinical").strip().lower()
+    export_context = (
+        "arzt_ernaehrungsberater"
+        if normalized_export_type in {"clinical", "arzt", "berater", "doctor", "advisor", "nutrition"}
+        else "standard"
+    )
+    filename = (
+        "ernaehrungstagebuch-arzt-berater-export.csv"
+        if export_context == "arzt_ernaehrungsberater"
+        else "ernaehrungstagebuch-export.csv"
+    )
+
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "record_type",
-        "id",
         "user_id",
-        "meal_name",
-        "meal_eaten_at",
-        "meal_notes",
-        "meal_created_at",
-        "meal_updated_at",
-        "symptom_type",
-        "symptom_value",
-        "symptom_timestamp",
-        "symptom_created_at",
-        "symptom_updated_at",
-        "wellbeing_value",
-        "wellbeing_timestamp",
-        "wellbeing_created_at",
-        "wellbeing_updated_at",
+        "username",
+        "timestamp_local",
+        "timestamp_utc",
+        "timezone",
+        "entry_type",
+        "category",
+        "sub_category",
+        "name",
+        "value",
+        "unit",
+        "notes",
+        "created_at",
+        "updated_at",
+        "sync_status",
+        "export_context",
     ])
 
     for meal in meals:
         writer.writerow([
-            "meal",
-            meal.id,
             meal.user_id,
+            meal.user.username if meal.user else "",
+            isoformat_for_local_time(meal.eaten_at),
+            isoformat_for_utc(meal.eaten_at),
+            "Europe/Berlin",
+            "meal",
+            "nutrition",
+            "meal",
             meal.name,
-            isoformat_or_value(meal.eaten_at),
+            "",
+            "meal",
             meal.notes or "",
             isoformat_or_value(meal.created_at),
             isoformat_or_value(meal.updated_at),
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
+            "synced",
+            export_context,
         ])
 
     for symptom in symptoms:
         writer.writerow([
-            "symptom",
-            symptom.id,
             symptom.user_id,
-            "",
-            "",
-            "",
-            "",
-            "",
+            symptom.user.username if symptom.user else "",
+            isoformat_for_local_time(symptom.timestamp),
+            isoformat_for_utc(symptom.timestamp),
+            "Europe/Berlin",
+            "symptom",
+            "symptom",
+            symptom.type,
             symptom.type,
             symptom.value,
-            isoformat_or_value(symptom.timestamp),
+            "scale_1_5",
+            "",
             isoformat_or_value(symptom.created_at),
             isoformat_or_value(symptom.updated_at),
-            "",
-            "",
-            "",
-            "",
+            "synced",
+            export_context,
         ])
 
     for entry in wellbeing_entries:
         writer.writerow([
-            "wellbeing",
-            entry.id,
             entry.user_id,
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
+            entry.user.username if entry.user else "",
+            isoformat_for_local_time(entry.timestamp),
+            isoformat_for_utc(entry.timestamp),
+            "Europe/Berlin",
+            "wellbeing",
+            "wellbeing",
+            "overall",
+            "overall_wellbeing",
             entry.value,
-            isoformat_or_value(entry.timestamp),
+            "scale_1_3",
+            "",
             isoformat_or_value(entry.created_at),
             isoformat_or_value(entry.updated_at),
+            "synced",
+            export_context,
         ])
 
     content = output.getvalue()
     return Response(content=content, media_type="text/csv", headers={
-        "Content-Disposition": "attachment; filename=ernaehrungstagebuch-export.csv"
+        "Content-Disposition": f"attachment; filename={filename}"
     })
+
+
+@app.post("/api/import/csv")
+def import_csv(
+    user_id: int | None = Query(default=None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Keine CSV-Datei ausgewählt")
+
+    try:
+        csv_content = file.file.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV-Datei ist kein UTF-8 Text")
+
+    reader = csv.DictReader(io.StringIO(csv_content))
+    if reader.fieldnames is None:
+        raise HTTPException(status_code=400, detail="CSV-Datei ist leer oder ungültig")
+
+    target_user_id = user_id
+    imported = {"meals": 0, "symptoms": 0, "wellbeing": 0}
+
+    for row in reader:
+        entry_type = (row.get("entry_type") or row.get("record_type") or "").strip().lower()
+        if not entry_type:
+            continue
+
+        raw_user_id = (row.get("user_id") or "").strip()
+        if target_user_id is None and raw_user_id:
+            target_user_id = int(raw_user_id)
+
+        if target_user_id is None:
+            continue
+
+        if entry_type == "meal":
+            meal_name = (row.get("name") or row.get("meal_name") or "").strip()
+            if not meal_name:
+                continue
+
+            meal = models.Meal(
+                user_id=target_user_id,
+                name=meal_name,
+                eaten_at=parse_csv_datetime(row.get("timestamp_local") or row.get("timestamp_utc") or row.get("meal_eaten_at")),
+                notes=(row.get("notes") or row.get("meal_notes") or "") or None,
+                created_at=parse_csv_datetime(row.get("created_at") or row.get("meal_created_at")),
+                updated_at=parse_csv_datetime(row.get("updated_at") or row.get("meal_updated_at")),
+            )
+            db.add(meal)
+            imported["meals"] += 1
+
+        elif entry_type == "symptom":
+            symptom_type = (row.get("sub_category") or row.get("symptom_type") or row.get("name") or "").strip()
+            symptom_value_raw = (row.get("value") or row.get("symptom_value") or "").strip()
+            if not symptom_type or not symptom_value_raw:
+                continue
+
+            symptom = models.Symptom(
+                user_id=target_user_id,
+                type=symptom_type,
+                value=int(symptom_value_raw),
+                timestamp=parse_csv_datetime(row.get("timestamp_local") or row.get("timestamp_utc") or row.get("symptom_timestamp")),
+                created_at=parse_csv_datetime(row.get("created_at") or row.get("symptom_created_at")),
+                updated_at=parse_csv_datetime(row.get("updated_at") or row.get("symptom_updated_at")),
+            )
+            db.add(symptom)
+            imported["symptoms"] += 1
+
+        elif entry_type == "wellbeing":
+            wellbeing_value_raw = (row.get("value") or row.get("wellbeing_value") or "").strip()
+            if not wellbeing_value_raw:
+                continue
+
+            entry = models.WellbeingEntry(
+                user_id=target_user_id,
+                value=int(wellbeing_value_raw),
+                timestamp=parse_csv_datetime(row.get("timestamp_local") or row.get("timestamp_utc") or row.get("wellbeing_timestamp")),
+                created_at=parse_csv_datetime(row.get("created_at") or row.get("wellbeing_created_at")),
+                updated_at=parse_csv_datetime(row.get("updated_at") or row.get("wellbeing_updated_at")),
+            )
+            db.add(entry)
+            imported["wellbeing"] += 1
+
+    db.commit()
+    return {"imported": imported}
+
+
+def isoformat_for_local_time(value):
+    if value is None:
+        return ""
+    parsed = value if isinstance(value, datetime) else parse_csv_datetime(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=None)
+    return parsed.astimezone().isoformat() if parsed.tzinfo else parsed.isoformat()
+
+
+def isoformat_for_utc(value):
+    if value is None:
+        return ""
+    parsed = value if isinstance(value, datetime) else parse_csv_datetime(value)
+    if parsed.tzinfo is None:
+        return parsed.isoformat() + "+00:00"
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def parse_csv_datetime(value):
+    if value is None or value == "":
+        return datetime.utcnow()
+
+    if isinstance(value, datetime):
+        return value
+
+    normalized = str(value).strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+
+    return datetime.fromisoformat(normalized)
 
 
 def isoformat_or_value(value):

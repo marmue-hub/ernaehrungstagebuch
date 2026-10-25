@@ -1,23 +1,35 @@
 :root {
-  font-family: Inter, system-ui, sans-serif;
-  line-height: 1.5;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", sans-serif;
+  line-height: 1.4;
   font-weight: 400;
-  background: #f3f9f1;
+  background: #edf7ee;
   color: #1f2d25;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  --iphone-bg: #edf7ee;
+  --iphone-card: rgba(255,255,255,0.9);
+  --iphone-green: #36a168;
+  --iphone-green-dark: #1f7d53;
+  --iphone-border: rgba(31, 96, 71, 0.09);
+  --iphone-shadow: rgba(24, 64, 46, 0.08);
 }
 
 * {
   box-sizing: border-box;
 }
 
+html, body, #root {
+  min-height: 100%;
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
-  background: linear-gradient(180deg, #ecf9ee 0%, #fdfdfd 100%);
+  background: var(--iphone-bg);
+  color: #1f2d25;
 }
 
 button,
@@ -28,56 +40,91 @@ select {
 
 button {
   border: none;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #4fb67a 0%, #2f7d5a 100%);
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--iphone-green) 0%, var(--iphone-green-dark) 100%);
   color: white;
-  padding: 0.8rem 1.1rem;
+  padding: 0.8rem 1rem;
   cursor: pointer;
-  box-shadow: 0 6px 16px rgba(47, 125, 90, 0.18);
+  box-shadow: 0 8px 18px rgba(31, 125, 83, 0.18);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 }
 
 button:hover {
-  background: linear-gradient(135deg, #43a66f 0%, #236a4d 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(31, 125, 83, 0.2);
 }
 
 .app-shell {
-  max-width: 960px;
+  max-width: 440px;
   margin: 0 auto;
-  padding: 1rem;
+  padding: max(0.75rem, env(safe-area-inset-top)) 0.8rem max(1.2rem, env(safe-area-inset-bottom));
+  min-height: 100vh;
 }
 
 .topbar {
-  background: linear-gradient(135deg, #7bd49a 0%, #2e905d 100%);
+  background: linear-gradient(180deg, #7dd99a 0%, #2f915f 100%);
   color: white;
-  padding: 1.1rem 1.25rem 1rem;
-  border-radius: 26px;
-  margin-bottom: 1rem;
-  box-shadow: 0 14px 30px rgba(46, 144, 93, 0.24);
-  border: 3px solid rgba(255,255,255,0.15);
+  padding: 0.8rem 0.9rem 0.7rem;
+  border-radius: 0 0 22px 22px;
+  margin-bottom: 0.85rem;
+  box-shadow: 0 12px 20px rgba(21, 103, 67, 0.14);
+  border: 1px solid rgba(255,255,255,0.18);
+}
+
+.topbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .topbar h1 {
   margin: 0;
-  font-size: clamp(1.8rem, 2vw, 2.5rem);
-  letter-spacing: 0.04em;
-  text-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  font-size: clamp(1.25rem, 2vw, 1.6rem);
+  letter-spacing: 0.02em;
+  text-shadow: 0 2px 7px rgba(0,0,0,0.08);
+  font-weight: 700;
+}
+
+.header-user-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.32rem 0.68rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: white;
+  font-weight: 700;
+  font-size: 0.72rem;
+  white-space: nowrap;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tab-bar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-  margin-top: 1rem;
+  flex-wrap: nowrap;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .tab-button {
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.1);
   color: white;
-  padding: 0.8rem 0.95rem;
+  padding: 0.56rem 0.78rem;
   border-radius: 999px;
-  min-width: 82px;
-  font-weight: 800;
+  min-width: 72px;
+  font-weight: 700;
+  font-size: 0.76rem;
   box-shadow: none;
 }
 
@@ -436,6 +483,56 @@ button:hover {
   inset: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+.clinical-card {
+  background: linear-gradient(135deg, #f3fff7 0%, #eef8ff 100%);
+}
+
+.clinical-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.clinical-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: rgba(255,255,255,0.8);
+  border: 1px solid #dfeee5;
+  border-radius: 16px;
+  padding: 0.75rem 0.8rem;
+}
+
+.clinical-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #5d7369;
+}
+
+.clinical-metric strong {
+  font-size: 0.98rem;
+  color: #1d4f3b;
+  line-height: 1.35;
+}
+
+.clinical-detail-list {
+  display: grid;
+  gap: 0.8rem;
+  background: rgba(255,255,255,0.55);
+  border: 1px solid #e0eee5;
+  border-radius: 16px;
+  padding: 0.8rem;
+}
+
+.clinical-detail-list p {
+  margin: 0.25rem 0 0;
+  color: #254d3d;
+  font-weight: 600;
 }
 
 .summary-grid {

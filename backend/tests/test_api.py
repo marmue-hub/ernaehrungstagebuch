@@ -38,29 +38,35 @@ def test_meal_creation_creates_reminders():
 
 
 def test_export_csv_returns_data():
-    client.post('/api/users', json={'username': 'tester'})
+    user = client.post('/api/users', json={'username': 'tester'}).json()
     client.post('/api/meals', json={
+        'user_id': user['id'],
         'name': 'Abendessen',
         'eaten_at': datetime(2026, 10, 25, 18, 30, tzinfo=timezone.utc).isoformat(),
         'notes': 'Test',
     })
     client.post('/api/symptoms', json={
+        'user_id': user['id'],
         'type': 'bauchweh',
         'value': 3,
         'timestamp': datetime(2026, 10, 25, 19, 0, tzinfo=timezone.utc).isoformat(),
     })
     client.post('/api/wellbeing', json={
+        'user_id': user['id'],
         'value': 2,
         'timestamp': datetime(2026, 10, 25, 20, 0, tzinfo=timezone.utc).isoformat(),
     })
 
-    response = client.get('/api/export/csv')
+    response = client.get('/api/export/csv?export_type=clinical')
     assert response.status_code == 200, response.text
     assert 'text/csv' in response.headers.get('content-type', '')
-    assert 'meal_name' in response.text
-    assert 'symptom_timestamp' in response.text
-    assert 'wellbeing_timestamp' in response.text
-    assert 'meal_created_at' in response.text
+    assert 'entry_type' in response.text
+    assert 'timestamp_local' in response.text
+    assert 'category' in response.text
+    assert 'wellbeing' in response.text
+    assert 'export_context' in response.text
+    assert 'arzt_ernaehrungsberater' in response.text
+    assert 'ernaehrungstagebuch-arzt-berater-export.csv' in response.headers.get('content-disposition', '')
 
 
 def test_user_specific_data_is_filtered():
@@ -87,3 +93,51 @@ def test_user_specific_data_is_filtered():
     ben_meals = client.get(f'/api/meals?user_id={user_two["id"]}')
     assert ben_meals.status_code == 200, ben_meals.text
     assert [meal['name'] for meal in ben_meals.json()] == ['Frühstück Ben']
+
+
+def test_import_csv_imports_exported_records():
+    user = client.post('/api/users', json={'username': 'importer'}).json()
+
+    client.post('/api/meals', json={
+        'user_id': user['id'],
+        'name': 'Frühstück',
+        'eaten_at': datetime(2026, 10, 25, 8, 0, tzinfo=timezone.utc).isoformat(),
+        'notes': 'Frisch',
+    })
+    client.post('/api/symptoms', json={
+        'user_id': user['id'],
+        'type': 'bauchweh',
+        'value': 3,
+        'timestamp': datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc).isoformat(),
+    })
+    client.post('/api/wellbeing', json={
+        'user_id': user['id'],
+        'value': 2,
+        'timestamp': datetime(2026, 10, 25, 10, 0, tzinfo=timezone.utc).isoformat(),
+    })
+
+    export_response = client.get(f'/api/export/csv?user_id={user["id"]}')
+    assert export_response.status_code == 200, export_response.text
+    csv_content = export_response.text
+
+    recipient = client.post('/api/users', json={'username': 'import_target'}).json()
+    response = client.post(
+        f'/api/import/csv?user_id={recipient["id"]}',
+        files={'file': ('export.csv', csv_content, 'text/csv')},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['imported']['meals'] == 1
+    assert payload['imported']['symptoms'] == 1
+    assert payload['imported']['wellbeing'] == 1
+
+    meals = client.get(f'/api/meals?user_id={recipient["id"]}')
+    assert [meal['name'] for meal in meals.json()] == ['Frühstück']
+
+    symptoms = client.get(f'/api/symptoms?user_id={recipient["id"]}')
+    assert symptoms.json()[0]['type'] == 'bauchweh'
+    assert symptoms.json()[0]['value'] == 3
+
+    wellbeing = client.get(f'/api/wellbeing?user_id={recipient["id"]}')
+    assert wellbeing.json()[0]['value'] == 2
