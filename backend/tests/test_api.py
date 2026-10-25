@@ -182,3 +182,71 @@ def test_import_csv_does_not_duplicate_existing_records():
     assert len(client.get(f'/api/meals?user_id={user["id"]}').json()) == 1
     assert len(client.get(f'/api/symptoms?user_id={user["id"]}').json()) == 1
     assert len(client.get(f'/api/wellbeing?user_id={user["id"]}').json()) == 1
+
+
+def test_admin_can_rename_and_delete_user():
+    user = client.post('/api/users', json={'username': 'old_name'}).json()
+
+    rename_response = client.put(f'/api/users/{user["id"]}', json={'username': 'new_name'})
+    assert rename_response.status_code == 200, rename_response.text
+    assert rename_response.json()['username'] == 'new_name'
+
+    delete_response = client.delete(f'/api/users/{user["id"]}')
+    assert delete_response.status_code == 200, delete_response.text
+    assert client.get('/api/users').json() == []
+
+
+def test_admin_can_update_and_delete_individual_entries():
+    user = client.post('/api/users', json={'username': 'entry_admin'}).json()
+
+    meal = client.post('/api/meals', json={
+        'user_id': user['id'],
+        'name': 'Frühstück',
+        'eaten_at': datetime(2026, 10, 25, 8, 0, tzinfo=timezone.utc).isoformat(),
+        'notes': 'alt',
+    }).json()
+    symptom = client.post('/api/symptoms', json={
+        'user_id': user['id'],
+        'type': 'bauchweh',
+        'value': 2,
+        'timestamp': datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc).isoformat(),
+    }).json()
+    wellbeing = client.post('/api/wellbeing', json={
+        'user_id': user['id'],
+        'value': 2,
+        'timestamp': datetime(2026, 10, 25, 10, 0, tzinfo=timezone.utc).isoformat(),
+    }).json()
+
+    updated_meal = client.put(f"/api/meals/{meal['id']}", json={
+        'user_id': user['id'],
+        'name': 'Gebäck',
+        'eaten_at': datetime(2026, 10, 25, 8, 30, tzinfo=timezone.utc).isoformat(),
+        'notes': 'neu',
+    })
+    assert updated_meal.status_code == 200, updated_meal.text
+    assert updated_meal.json()['name'] == 'Gebäck'
+
+    updated_symptom = client.put(f"/api/symptoms/{symptom['id']}", json={
+        'user_id': user['id'],
+        'type': 'stress',
+        'value': 4,
+        'timestamp': datetime(2026, 10, 25, 9, 30, tzinfo=timezone.utc).isoformat(),
+    })
+    assert updated_symptom.status_code == 200, updated_symptom.text
+    assert updated_symptom.json()['type'] == 'stress'
+
+    updated_wellbeing = client.put(f"/api/wellbeing/{wellbeing['id']}", json={
+        'user_id': user['id'],
+        'value': 1,
+        'timestamp': datetime(2026, 10, 25, 10, 30, tzinfo=timezone.utc).isoformat(),
+    })
+    assert updated_wellbeing.status_code == 200, updated_wellbeing.text
+    assert updated_wellbeing.json()['value'] == 1
+
+    assert client.delete(f"/api/meals/{meal['id']}").status_code == 200
+    assert client.delete(f"/api/symptoms/{symptom['id']}").status_code == 200
+    assert client.delete(f"/api/wellbeing/{wellbeing['id']}").status_code == 200
+
+    assert client.get(f'/api/meals?user_id={user["id"]}').json() == []
+    assert client.get(f'/api/symptoms?user_id={user["id"]}').json() == []
+    assert client.get(f'/api/wellbeing?user_id={user["id"]}').json() == []

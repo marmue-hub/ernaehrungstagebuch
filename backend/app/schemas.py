@@ -8,6 +8,11 @@ class UserCreate(BaseModel):
     username: str = Field(..., min_length=2, max_length=100)
 
 
+class UserUpdate(BaseModel):
+    username: str = Field(..., min_length=2, max_length=100)
+    display_name: Optional[str] = None
+
+
 class UserOut(BaseModel):
     id: int
     username: str
@@ -16,6 +21,13 @@ class UserOut(BaseModel):
 
 
 class MealCreate(BaseModel):
+    user_id: Optional[int] = None
+    name: str = Field(..., min_length=1, max_length=255)
+    eaten_at: datetime
+    notes: Optional[str] = None
+
+
+class MealUpdate(BaseModel):
     user_id: Optional[int] = None
     name: str = Field(..., min_length=1, max_length=255)
     eaten_at: datetime
@@ -40,6 +52,14 @@ class SymptomCreate(BaseModel):
     timestamp: datetime
 
 
+class SymptomUpdate(BaseModel):
+    user_id: Optional[int] = None
+    meal_id: Optional[int] = None
+    type: str
+    value: int = Field(..., ge=1, le=5)
+    timestamp: datetime
+
+
 class SymptomOut(BaseModel):
     id: int
     user_id: int
@@ -52,6 +72,12 @@ class SymptomOut(BaseModel):
 
 
 class WellbeingCreate(BaseModel):
+    user_id: Optional[int] = None
+    value: int = Field(..., ge=1, le=3)
+    timestamp: datetime
+
+
+class WellbeingUpdate(BaseModel):
     user_id: Optional[int] = None
     value: int = Field(..., ge=1, le=3)
     timestamp: datetime

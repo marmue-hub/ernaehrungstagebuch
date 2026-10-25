@@ -50,15 +50,51 @@ def get_users(db: Session = Depends(get_db)):
     return users
 
 
+@app.put("/api/users/{user_id}", response_model=schemas.UserOut)
+def update_user(user_id: int, payload: schemas.UserUpdate, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
+
+    normalized_name = payload.username.strip()
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="Benutzername darf nicht leer sein")
+
+    duplicate = db.query(models.User).filter(models.User.username == normalized_name, models.User.id != user_id).first()
+    if duplicate:
+        raise HTTPException(status_code=400, detail="Benutzername bereits vorhanden")
+
+    user.username = normalized_name
+    user.display_name = payload.display_name.strip() if payload.display_name else normalized_name
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@app.delete("/api/users/{user_id}")
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Benutzer nicht gefunden")
+
+    db.query(models.Meal).filter(models.Meal.user_id == user_id).delete()
+    db.query(models.Symptom).filter(models.Symptom.user_id == user_id).delete()
+    db.query(models.WellbeingEntry).filter(models.WellbeingEntry.user_id == user_id).delete()
+    db.delete(user)
+    db.commit()
+    return {"deleted": True, "user_id": user_id}
+
+
 @app.post("/api/users", response_model=schemas.UserOut, status_code=status.HTTP_201_CREATED)
 def create_user(payload: schemas.UserCreate, db: Session = Depends(get_db)):
     existing = db.query(models.User).filter(models.User.username == payload.username).first()
     if existing:
         raise HTTPException(status_code=400, detail="Benutzername bereits vorhanden")
 
+    normalized_name = payload.username.strip()
     user = models.User(
-        username=payload.username,
-        display_name=payload.username,
+        username=normalized_name,
+        display_name=normalized_name,
         created_at=datetime.utcnow(),
     )
     db.add(user)
@@ -106,6 +142,35 @@ def create_meal(payload: schemas.MealCreate, db: Session = Depends(get_db)):
     return meal
 
 
+@app.put("/api/meals/{meal_id}", response_model=schemas.MealOut)
+def update_meal(meal_id: int, payload: schemas.MealUpdate, db: Session = Depends(get_db)):
+    meal = db.query(models.Meal).filter(models.Meal.id == meal_id).first()
+    if meal is None:
+        raise HTTPException(status_code=404, detail="Mahlzeit nicht gefunden")
+
+    target_user_id = resolve_user_id(db, payload.user_id if payload.user_id is not None else meal.user_id)
+    meal.user_id = target_user_id
+    meal.name = payload.name.strip()
+    if not meal.name:
+        raise HTTPException(status_code=400, detail="Name darf nicht leer sein")
+    meal.eaten_at = payload.eaten_at
+    meal.notes = payload.notes
+    meal.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(meal)
+    return meal
+
+
+@app.delete("/api/meals/{meal_id}")
+def delete_meal(meal_id: int, db: Session = Depends(get_db)):
+    meal = db.query(models.Meal).filter(models.Meal.id == meal_id).first()
+    if meal is None:
+        raise HTTPException(status_code=404, detail="Mahlzeit nicht gefunden")
+    db.delete(meal)
+    db.commit()
+    return {"deleted": True, "meal_id": meal_id}
+
+
 @app.get("/api/symptoms", response_model=List[schemas.SymptomOut])
 def get_symptoms(user_id: int | None = Query(default=None), db: Session = Depends(get_db)):
     query = db.query(models.Symptom)
@@ -133,6 +198,34 @@ def create_symptom(payload: schemas.SymptomCreate, db: Session = Depends(get_db)
     return symptom
 
 
+@app.put("/api/symptoms/{symptom_id}", response_model=schemas.SymptomOut)
+def update_symptom(symptom_id: int, payload: schemas.SymptomUpdate, db: Session = Depends(get_db)):
+    symptom = db.query(models.Symptom).filter(models.Symptom.id == symptom_id).first()
+    if symptom is None:
+        raise HTTPException(status_code=404, detail="Symptom nicht gefunden")
+
+    target_user_id = resolve_user_id(db, payload.user_id if payload.user_id is not None else symptom.user_id)
+    symptom.user_id = target_user_id
+    symptom.meal_id = payload.meal_id
+    symptom.type = payload.type
+    symptom.value = payload.value
+    symptom.timestamp = payload.timestamp
+    symptom.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(symptom)
+    return symptom
+
+
+@app.delete("/api/symptoms/{symptom_id}")
+def delete_symptom(symptom_id: int, db: Session = Depends(get_db)):
+    symptom = db.query(models.Symptom).filter(models.Symptom.id == symptom_id).first()
+    if symptom is None:
+        raise HTTPException(status_code=404, detail="Symptom nicht gefunden")
+    db.delete(symptom)
+    db.commit()
+    return {"deleted": True, "symptom_id": symptom_id}
+
+
 @app.get("/api/wellbeing", response_model=List[schemas.WellbeingOut])
 def get_wellbeing(user_id: int | None = Query(default=None), db: Session = Depends(get_db)):
     query = db.query(models.WellbeingEntry)
@@ -156,6 +249,32 @@ def create_wellbeing(payload: schemas.WellbeingCreate, db: Session = Depends(get
     db.commit()
     db.refresh(entry)
     return entry
+
+
+@app.put("/api/wellbeing/{wellbeing_id}", response_model=schemas.WellbeingOut)
+def update_wellbeing(wellbeing_id: int, payload: schemas.WellbeingUpdate, db: Session = Depends(get_db)):
+    entry = db.query(models.WellbeingEntry).filter(models.WellbeingEntry.id == wellbeing_id).first()
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Wohlbefinden nicht gefunden")
+
+    target_user_id = resolve_user_id(db, payload.user_id if payload.user_id is not None else entry.user_id)
+    entry.user_id = target_user_id
+    entry.value = payload.value
+    entry.timestamp = payload.timestamp
+    entry.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+@app.delete("/api/wellbeing/{wellbeing_id}")
+def delete_wellbeing(wellbeing_id: int, db: Session = Depends(get_db)):
+    entry = db.query(models.WellbeingEntry).filter(models.WellbeingEntry.id == wellbeing_id).first()
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Wohlbefinden nicht gefunden")
+    db.delete(entry)
+    db.commit()
+    return {"deleted": True, "wellbeing_id": wellbeing_id}
 
 
 def build_reminder_entries_for_meal(meal: models.Meal):

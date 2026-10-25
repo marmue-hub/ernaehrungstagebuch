@@ -62,13 +62,13 @@ button:hover {
 }
 
 .topbar {
-  background: linear-gradient(180deg, #7dd99a 0%, #2f915f 100%);
+  background: linear-gradient(180deg, #83e1a7 0%, #2d8d5e 100%);
   color: white;
   padding: 0.8rem 0.9rem 0.7rem;
-  border-radius: 0 0 22px 22px;
+  border-radius: 0 0 24px 24px;
   margin-bottom: 0.85rem;
-  box-shadow: 0 12px 20px rgba(21, 103, 67, 0.14);
-  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 14px 24px rgba(21, 103, 67, 0.18);
+  border: 1px solid rgba(255,255,255,0.2);
 }
 
 .topbar-row {
@@ -155,11 +155,13 @@ button:hover {
 }
 
 .hero-card {
-  background: linear-gradient(135deg, #ebfff2 0%, #f8fff7 100%);
+  background: radial-gradient(circle at top left, rgba(255, 242, 173, 0.9), transparent 28%),
+    linear-gradient(135deg, #ecfff2 0%, #f9fff7 100%);
+  border-color: rgba(51, 132, 89, 0.12);
 }
 
 .game-card {
-  background: linear-gradient(135deg, #fffef3 0%, #f1ffea 100%);
+  background: linear-gradient(135deg, #fffef4 0%, #ecffe9 100%);
 }
 
 .quick-grid {
@@ -176,10 +178,10 @@ button:hover {
   min-height: 150px;
   padding: 1rem 0.85rem;
   border-radius: 22px;
-  background: linear-gradient(180deg, #f9fff5 0%, #ebf9ef 100%);
+  background: linear-gradient(180deg, #ffffff 0%, #eefbf0 100%);
   color: #123e2d;
-  border: 2px solid #d8f0dd;
-  box-shadow: 0 8px 18px rgba(31, 92, 71, 0.08);
+  border: 2px solid rgba(102, 181, 124, 0.18);
+  box-shadow: 0 10px 18px rgba(31, 92, 71, 0.07);
 }
 
 .quick-action:hover {

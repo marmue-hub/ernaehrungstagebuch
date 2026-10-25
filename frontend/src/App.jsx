@@ -30,6 +30,13 @@ const queuePendingEntry = (kind, payload) => {
   return queue.length;
 };
 
+const toDateTimeLocalValue = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+};
+
 const formatBerlinDateTimeForInput = (date = new Date()) => {
   const formatter = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Europe/Berlin',
@@ -205,16 +212,47 @@ function App() {
   const [symptoms, setSymptoms] = useState([]);
   const [wellbeing, setWellbeing] = useState([]);
   const [form, setForm] = useState(initialState);
+  const [lastSavedMeal, setLastSavedMeal] = useState('');
   const [activeTab, setActiveTab] = useState('start');
+  const [route, setRoute] = useState(() => (
+    window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')
+      ? 'admin'
+      : 'app'
+  ));
   const [syncInfo, setSyncInfo] = useState({
     lastSyncAt: null,
     pendingChanges: 0,
     isOffline: false,
   });
 
+  const navigateTo = (nextRoute) => {
+    const targetPath = nextRoute === 'admin' ? '/admin' : '/';
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({}, '', targetPath);
+    }
+    setRoute(nextRoute);
+  };
+
+  useEffect(() => {
+    const handleLocationChange = () => {
+      const nextRoute = window.location.pathname === '/admin' || window.location.pathname.startsWith('/admin/')
+        ? 'admin'
+        : 'app';
+      setRoute(nextRoute);
+    };
+
+    window.addEventListener('popstate', handleLocationChange);
+    return () => window.removeEventListener('popstate', handleLocationChange);
+  }, []);
+
   const activeUserName = selectedUserId
     ? users.find((item) => item.id === selectedUserId)?.username || user
     : user;
+  const [adminUserName, setAdminUserName] = useState('');
+  const [adminTargetUserId, setAdminTargetUserId] = useState('all');
+  const [adminRenameDrafts, setAdminRenameDrafts] = useState({});
+  const [adminEntries, setAdminEntries] = useState({ meals: [], symptoms: [], wellbeing: [] });
+  const [adminEntryDrafts, setAdminEntryDrafts] = useState({});
 
   const fetchUsers = async () => {
     try {
@@ -225,6 +263,7 @@ function App() {
 
       if (!nextUsers.length) {
         setSelectedUserId(null);
+        setAdminTargetUserId('all');
         localStorage.removeItem('ernaehrungstagebuch-selected-user');
         return;
       }
@@ -235,8 +274,36 @@ function App() {
       setSelectedUserId(currentSelection);
       localStorage.setItem('ernaehrungstagebuch-selected-user', String(currentSelection));
       setUser(nextUsers.find((item) => item.id === currentSelection)?.username || '');
+
+      if (route === 'admin' && adminTargetUserId === 'all') {
+        setAdminTargetUserId(String(currentSelection));
+      }
     } catch (error) {
       setStatus(error.message);
+    }
+  };
+
+  const fetchAdminEntries = async (targetUserId = adminTargetUserId) => {
+    const normalizedUserId = targetUserId === 'all' ? null : Number(targetUserId);
+
+    try {
+      const [mealRes, symptomRes, wellbeingRes] = await Promise.all([
+        fetch(`${API_URL}/api/meals${normalizedUserId ? `?user_id=${normalizedUserId}` : ''}`),
+        fetch(`${API_URL}/api/symptoms${normalizedUserId ? `?user_id=${normalizedUserId}` : ''}`),
+        fetch(`${API_URL}/api/wellbeing${normalizedUserId ? `?user_id=${normalizedUserId}` : ''}`),
+      ]);
+
+      const mealsData = mealRes.ok ? await mealRes.json() : [];
+      const symptomsData = symptomRes.ok ? await symptomRes.json() : [];
+      const wellbeingData = wellbeingRes.ok ? await wellbeingRes.json() : [];
+
+      setAdminEntries({
+        meals: mealsData,
+        symptoms: symptomsData,
+        wellbeing: wellbeingData,
+      });
+    } catch (error) {
+      setStatus(error.message || 'Einträge konnten nicht geladen werden');
     }
   };
 
@@ -349,6 +416,17 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (route !== 'admin') return;
+
+    if (users.length && adminTargetUserId === 'all' && selectedUserId !== null) {
+      setAdminTargetUserId(String(selectedUserId));
+      return;
+    }
+
+    fetchAdminEntries(adminTargetUserId);
+  }, [route, adminTargetUserId, users, selectedUserId]);
+
+  useEffect(() => {
     if (selectedUserId === null) return;
     fetchData();
     syncQueuedEntries();
@@ -402,6 +480,79 @@ function App() {
     }
   };
 
+  const handleAdminEntryDraftChange = (type, entryId, field, value) => {
+    const key = `${type}-${entryId}`;
+    setAdminEntryDrafts((previous) => ({
+      ...previous,
+      [key]: {
+        ...(previous[key] || {}),
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleAdminEntrySave = async (type, entry) => {
+    const key = `${type}-${entry.id}`;
+    const draft = adminEntryDrafts[key] || {};
+
+    try {
+      const payload = {
+        user_id: entry.user_id,
+      };
+
+      if (type === 'meal') {
+        payload.name = (draft.name ?? entry.name).trim();
+        payload.eaten_at = new Date(draft.eaten_at ?? entry.eaten_at).toISOString();
+        payload.notes = draft.notes ?? entry.notes ?? '';
+      }
+
+      if (type === 'symptom') {
+        payload.type = draft.type ?? entry.type;
+        payload.value = Number(draft.value ?? entry.value);
+        payload.timestamp = new Date(draft.timestamp ?? entry.timestamp).toISOString();
+      }
+
+      if (type === 'wellbeing') {
+        payload.value = Number(draft.value ?? entry.value);
+        payload.timestamp = new Date(draft.timestamp ?? entry.timestamp).toISOString();
+      }
+
+      const response = await fetch(`${API_URL}/api/${type === 'meal' ? 'meals' : type === 'symptom' ? 'symptoms' : 'wellbeing'}/${entry.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Eintrag konnte nicht gespeichert werden');
+      }
+
+      setStatus('Eintrag gespeichert');
+      await fetchAdminEntries(adminTargetUserId);
+    } catch (error) {
+      setStatus(error.message || 'Eintrag konnte nicht gespeichert werden');
+    }
+  };
+
+  const handleAdminEntryDelete = async (type, entryId) => {
+    try {
+      const response = await fetch(`${API_URL}/api/${type === 'meal' ? 'meals' : type === 'symptom' ? 'symptoms' : 'wellbeing'}/${entryId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Eintrag konnte nicht gelöscht werden');
+      }
+
+      setStatus('Eintrag gelöscht');
+      await fetchAdminEntries(adminTargetUserId);
+    } catch (error) {
+      setStatus(error.message || 'Eintrag konnte nicht gelöscht werden');
+    }
+  };
+
   const handleMealSubmit = async (event) => {
     event.preventDefault();
 
@@ -426,16 +577,22 @@ function App() {
 
       if (!response.ok) throw new Error('Mahlzeit konnte nicht gespeichert werden');
 
+      const savedMealName = payload.name?.trim() || 'Mahlzeit';
+      const savedMealTime = formatDateTimeBerlin(payload.eaten_at);
       setForm((prev) => ({ ...prev, mealName: '' }));
+      setLastSavedMeal(`${savedMealName} · ${savedMealTime}`);
       setSyncInfo({
         lastSyncAt: new Date().toISOString(),
         pendingChanges: readSyncQueue().length,
         isOffline: false,
       });
-      setStatus('Mahlzeit gespeichert');
+      setStatus(`Gespeichert: ${savedMealName} · ${savedMealTime}`);
       fetchData();
     } catch (error) {
       queuePendingEntry('meal', payload);
+      const savedMealName = payload.name?.trim() || 'Mahlzeit';
+      const savedMealTime = formatDateTimeBerlin(payload.eaten_at);
+      setLastSavedMeal(`Lokal gespeichert: ${savedMealName} · ${savedMealTime}`);
       setSyncInfo({
         lastSyncAt: syncInfo.lastSyncAt,
         pendingChanges: readSyncQueue().length,
@@ -549,6 +706,88 @@ function App() {
     },
   ];
 
+  const handleAdminCreateUser = async () => {
+    const username = adminUserName.trim();
+    if (!username) {
+      setStatus('Bitte Administrator-Benutzername eingeben');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/api/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Benutzer konnte nicht angelegt werden');
+      }
+
+      setAdminUserName('');
+      await fetchUsers();
+      setStatus(`Benutzer ${username} angelegt`);
+    } catch (error) {
+      setStatus(error.message);
+    }
+  };
+
+  const handleAdminRenameUser = async (userId) => {
+    const username = (adminRenameDrafts[userId] || '').trim();
+    if (!username) {
+      setStatus('Bitte neuen Benutzernamen eingeben');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/api/users/${userId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Benutzer konnte nicht umbenannt werden');
+      }
+
+      await fetchUsers();
+      setStatus(`Benutzer umbenannt in ${username}`);
+    } catch (error) {
+      setStatus(error.message);
+    }
+  };
+
+  const handleAdminDeleteUser = async (userId) => {
+    const userToDelete = users.find((user) => user.id === userId);
+    if (!userToDelete) return;
+
+    const confirmed = window.confirm(`Benutzer "${userToDelete.username}" und alle zugehörigen Einträge wirklich löschen?`);
+    if (!confirmed) return;
+
+    try {
+      const response = await fetch(`${API_URL}/api/users/${userId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Benutzer konnte nicht gelöscht werden');
+      }
+
+      if (selectedUserId === userId) {
+        setSelectedUserId(null);
+        localStorage.removeItem('ernaehrungstagebuch-selected-user');
+      }
+
+      await fetchUsers();
+      setStatus(`Benutzer ${userToDelete.username} gelöscht`);
+    } catch (error) {
+      setStatus(error.message);
+    }
+  };
+
   const handleExportCsv = async (exportType = 'clinical') => {
     try {
       const baseUrl = selectedUserId
@@ -573,6 +812,70 @@ function App() {
       setStatus(exportType === 'clinical' ? 'Arzt-/Berater-Export erstellt' : 'CSV exportiert');
     } catch (error) {
       setStatus(error.message);
+    }
+  };
+
+  const handleAdminExportCsv = async (userId = null) => {
+    try {
+      const exportUrl = userId
+        ? `${API_URL}/api/export/csv?user_id=${userId}`
+        : `${API_URL}/api/export/csv`;
+      const response = await fetch(exportUrl);
+      if (!response.ok) throw new Error('Admin-Export fehlgeschlagen');
+
+      const blob = await response.blob();
+      const fileName = userId
+        ? `ernaehrungstagebuch-user-${userId}.csv`
+        : 'ernaehrungstagebuch-datenbank.csv';
+      const exportBlobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = exportBlobUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(exportBlobUrl);
+      setStatus(userId ? `CSV für Benutzer ${userId} exportiert` : 'Gesamte Datenbank exportiert');
+    } catch (error) {
+      setStatus(error.message);
+    }
+  };
+
+  const handleAdminImportCsv = async (event, userId = null) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const importUrl = userId
+        ? `${API_URL}/api/import/csv?user_id=${userId}`
+        : `${API_URL}/api/import/csv`;
+
+      const response = await fetch(importUrl, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Admin-CSV Import fehlgeschlagen');
+      }
+
+      const payload = await response.json();
+      const summary = payload.imported || {};
+      setStatus(
+        `CSV importiert: ${summary.meals ?? 0} Mahlzeiten, ${summary.symptoms ?? 0} Symptome, ${summary.wellbeing ?? 0} Wohlbefinden.`
+      );
+      await fetchUsers();
+      if (selectedUserId) {
+        await fetchData();
+      }
+    } catch (error) {
+      setStatus(error.message || 'Admin-CSV Import fehlgeschlagen');
+    } finally {
+      event.target.value = '';
     }
   };
 
@@ -627,12 +930,69 @@ function App() {
     ? `${symptomTypeMeta[symptomBreakdown[0][0]]?.label || symptomBreakdown[0][0]} (${symptomBreakdown[0][1]}x)`
     : 'Keine Symptome';
 
-  const latestWellbeing = wellbeing[0];
-  const latestMeal = meals[0];
-  const recentMealNames = meals.slice(0, 3).map((meal) => meal.name).join(', ') || 'Keine Mahlzeiten';
+  const sortedMeals = [...meals].sort((a, b) => new Date(b.eaten_at || b.timestamp) - new Date(a.eaten_at || a.timestamp));
+  const sortedSymptoms = [...symptoms].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const sortedWellbeing = [...wellbeing].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+  const latestWellbeing = sortedWellbeing[0];
+  const latestMeal = sortedMeals[0];
+  const recentMealNames = sortedMeals.slice(0, 3).map((meal) => meal.name).join(', ') || 'Keine Mahlzeiten';
   const trackingDays = new Set(
-    [...meals, ...symptoms, ...wellbeing].map((item) => new Date(item.eaten_at || item.timestamp).toISOString().slice(0, 10))
+    [...sortedMeals, ...sortedSymptoms, ...sortedWellbeing].map((item) => new Date(item.eaten_at || item.timestamp).toISOString().slice(0, 10))
   ).size;
+
+  const historyEntries = [
+    ...sortedMeals.map((meal) => ({
+      id: `meal-${meal.id}`,
+      type: 'meal',
+      label: 'Mahlzeit',
+      icon: '🍽️',
+      value: meal.name,
+      timestamp: meal.eaten_at,
+    })),
+    ...sortedSymptoms.map((item) => {
+      const symptomMeta = symptomTypeMeta[item.type] ?? { label: item.type, emoji: '😵' };
+      return {
+        id: `symptom-${item.id}`,
+        type: 'symptom',
+        label: symptomMeta.label,
+        icon: symptomMeta.emoji,
+        value: symptomLabels[item.value] ?? item.value,
+        timestamp: item.timestamp,
+      };
+    }),
+    ...sortedWellbeing.map((item) => ({
+      id: `wellbeing-${item.id}`,
+      type: 'wellbeing',
+      label: 'Wohlbefinden',
+      icon: wellbeingEmojis[item.value] ?? '🙂',
+      value: wellbeingLabels[item.value] ?? item.value,
+      timestamp: item.timestamp,
+    })),
+  ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+  const getBerlinDateKey = (dateValue) => {
+    const date = new Date(dateValue);
+    const formatter = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Europe/Berlin',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    return formatter.format(date);
+  };
+
+  const todayKey = getBerlinDateKey(new Date());
+  const yesterdayKey = getBerlinDateKey(new Date(Date.now() - 24 * 60 * 60 * 1000));
+
+  const historyGroups = {
+    today: historyEntries.filter((entry) => getBerlinDateKey(entry.timestamp) === todayKey),
+    yesterday: historyEntries.filter((entry) => getBerlinDateKey(entry.timestamp) === yesterdayKey),
+    older: historyEntries.filter((entry) => {
+      const key = getBerlinDateKey(entry.timestamp);
+      return key !== todayKey && key !== yesterdayKey;
+    }),
+  };
 
   return (
     <div className="app-shell">
@@ -641,34 +1001,277 @@ function App() {
           <h1>Ernährungstagebuch</h1>
           {activeUserName && <span className="header-user-pill">{activeUserName}</span>}
         </div>
-        <nav className="tab-bar" aria-label="Hauptnavigation">
-          {[
-            { id: 'start', label: 'Start' },
-            { id: 'meal', label: 'Essen' },
-            { id: 'mood', label: 'Gefühl' },
-            { id: 'history', label: 'Verlauf' },
-          ].map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              className={activeTab === tab.id ? 'tab-button active' : 'tab-button'}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
+        {!window.location.pathname.startsWith('/admin') && (
+          <nav className="tab-bar" aria-label="Hauptnavigation">
+            {[
+              { id: 'start', label: 'Start' },
+              { id: 'meal', label: 'Essen' },
+              { id: 'mood', label: 'Gefühl' },
+              { id: 'history', label: 'Verlauf' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={activeTab === tab.id ? 'tab-button active' : 'tab-button'}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        )}
       </header>
 
       <main className="content">
-        {activeTab === 'start' && (
+        {route === 'admin' && (
+          <section className="card">
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2 style={{ margin: 0 }}>Admin-Bereich</h2>
+              <button type="button" onClick={() => navigateTo('app')}>Zurück zur App</button>
+            </div>
+
+            <div className="stack">
+              <h3>Neuen Benutzer anlegen</h3>
+              <div className="row user-creator-row">
+                <input
+                  value={adminUserName}
+                  onChange={(event) => setAdminUserName(event.target.value)}
+                  placeholder="Benutzername"
+                />
+                <button type="button" onClick={handleAdminCreateUser}>Anlegen</button>
+              </div>
+            </div>
+
+            <div className="stack" style={{ marginTop: '2rem' }}>
+              <h3>Benutzer verwalten</h3>
+              {users.length ? users.map((userItem) => (
+                <div key={userItem.id} className="row admin-user-row">
+                  <span className="label-pill">#{userItem.id}</span>
+                  <input
+                    value={adminRenameDrafts[userItem.id] ?? userItem.username}
+                    onChange={(event) => setAdminRenameDrafts((previous) => ({
+                      ...previous,
+                      [userItem.id]: event.target.value,
+                    }))}
+                  />
+                  <button type="button" onClick={() => handleAdminRenameUser(userItem.id)}>Umbenennen</button>
+                  <button type="button" className="danger-button" onClick={() => handleAdminDeleteUser(userItem.id)}>Löschen</button>
+                </div>
+              )) : <p>Keine Benutzer vorhanden.</p>}
+            </div>
+
+            <div className="stack" style={{ marginTop: '2rem' }}>
+              <h3>Einträge verwalten</h3>
+              <div className="row user-creator-row">
+                <select
+                  value={adminTargetUserId}
+                  onChange={(event) => setAdminTargetUserId(event.target.value)}
+                >
+                  <option value="all">Gesamte Datenbank</option>
+                  {users.map((userItem) => (
+                    <option key={userItem.id} value={String(userItem.id)}>
+                      {userItem.username}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {['meal', 'symptom', 'wellbeing'].map((type) => {
+                const entries = type === 'meal'
+                  ? adminEntries.meals
+                  : type === 'symptom'
+                    ? adminEntries.symptoms
+                    : adminEntries.wellbeing;
+
+                const totalEntries = adminEntries.meals.length + adminEntries.symptoms.length + adminEntries.wellbeing.length;
+                if (!entries.length && totalEntries > 0) return null;
+
+                return (
+                  <div key={type} className="stack" style={{ marginTop: '1rem' }}>
+                    <h4 style={{ margin: '0 0 0.5rem' }}>
+                      {type === 'meal' ? 'Mahlzeiten' : type === 'symptom' ? 'Symptome' : 'Wohlbefinden'}
+                    </h4>
+                    {!entries.length && (
+                      <p style={{ margin: 0, color: '#5d6b5d' }}>
+                        Keine {type === 'meal' ? 'Mahlzeiten' : type === 'symptom' ? 'Symptome' : 'Wohlbefinden'} für diesen Benutzer vorhanden.
+                      </p>
+                    )}
+                    {entries.map((entry) => {
+                      const draft = adminEntryDrafts[`${type}-${entry.id}`] || {};
+
+                      return (
+                        <div key={entry.id} className="row admin-user-row" style={{ flexWrap: 'wrap' }}>
+                          <span className="label-pill">#{entry.id}</span>
+                          {type === 'meal' && (
+                            <>
+                              <input
+                                value={draft.name ?? entry.name}
+                                onChange={(event) => handleAdminEntryDraftChange(type, entry.id, 'name', event.target.value)}
+                              />
+                              <input
+                                type="datetime-local"
+                                value={toDateTimeLocalValue(draft.eaten_at ?? entry.eaten_at)}
+                                onChange={(event) => handleAdminEntryDraftChange(type, entry.id, 'eaten_at', event.target.value)}
+                              />
+                              <input
+                                value={draft.notes ?? entry.notes ?? ''}
+                                placeholder="Notiz"
+                                onChange={(event) => handleAdminEntryDraftChange(type, entry.id, 'notes', event.target.value)}
+                              />
+                            </>
+                          )}
+                          {type === 'symptom' && (
+                            <>
+                              <select
+                                value={draft.type ?? entry.type}
+                                onChange={(event) => handleAdminEntryDraftChange(type, entry.id, 'type', event.target.value)}
+                              >
+                                <option value="bauchweh">Bauchweh</option>
+                                <option value="uebelkeit">Übelkeit</option>
+                                <option value="kopfschmerzen">Kopfschmerzen</option>
+                                <option value="stress">Stress</option>
+                              </select>
+                              <select
+                                value={draft.value ?? entry.value}
+                                onChange={(event) => handleAdminEntryDraftChange(type, entry.id, 'value', event.target.value)}
+                              >
+                                {[1,2,3,4,5].map((value) => (
+                                  <option key={value} value={value}>{value}</option>
+                                ))}
+                              </select>
+                              <input
+                                type="datetime-local"
+                                value={toDateTimeLocalValue(draft.timestamp ?? entry.timestamp)}
+                                onChange={(event) => handleAdminEntryDraftChange(type, entry.id, 'timestamp', event.target.value)}
+                              />
+                            </>
+                          )}
+                          {type === 'wellbeing' && (
+                            <>
+                              <select
+                                value={draft.value ?? entry.value}
+                                onChange={(event) => handleAdminEntryDraftChange(type, entry.id, 'value', event.target.value)}
+                              >
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                              </select>
+                              <input
+                                type="datetime-local"
+                                value={toDateTimeLocalValue(draft.timestamp ?? entry.timestamp)}
+                                onChange={(event) => handleAdminEntryDraftChange(type, entry.id, 'timestamp', event.target.value)}
+                              />
+                            </>
+                          )}
+                          <button type="button" onClick={() => handleAdminEntrySave(type, entry)}>Speichern</button>
+                          <button type="button" className="danger-button" onClick={() => handleAdminEntryDelete(type, entry.id)}>Löschen</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="stack" style={{ marginTop: '2rem' }}>
+              <h3>CSV-Import / Export</h3>
+              <div className="row user-creator-row">
+                <select
+                  value={adminTargetUserId}
+                  onChange={(event) => setAdminTargetUserId(event.target.value)}
+                >
+                  <option value="all">Gesamte Datenbank</option>
+                  {users.map((userItem) => (
+                    <option key={userItem.id} value={String(userItem.id)}>
+                      {userItem.username}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" onClick={() => handleAdminExportCsv(adminTargetUserId === 'all' ? null : Number(adminTargetUserId))}>
+                  Export
+                </button>
+                <label className="import-button">
+                  Import
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(event) => handleAdminImportCsv(event, adminTargetUserId === 'all' ? null : Number(adminTargetUserId))}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="stack" style={{ marginTop: '2rem' }}>
+              <h3>Verlauf & Export</h3>
+              <div className="sync-banner">
+                <span className={syncInfo.isOffline ? 'sync-status offline' : 'sync-status online'}>
+                  {syncInfo.isOffline
+                    ? `${syncInfo.pendingChanges} Änderung(en) warten auf Synchronisierung`
+                    : syncInfo.lastSyncAt
+                      ? `Letzte Synchronisierung: ${formatDateTimeBerlin(syncInfo.lastSyncAt)}`
+                      : 'Noch keine Synchronisierung'}
+                </span>
+                <button type="button" className="sync-button" onClick={syncQueuedEntries}>
+                  Jetzt synchronisieren
+                </button>
+              </div>
+              <div className="history-actions">
+                <button type="button" onClick={() => handleExportCsv('clinical')}>
+                  Arzt-/Berater-Export
+                </button>
+                <button type="button" onClick={() => handleExportCsv('standard')}>
+                  Standard-CSV exportieren
+                </button>
+              </div>
+            </div>
+
+            <section className="card clinical-card" style={{ marginTop: '2rem' }}>
+              <h2>Arzt-/Berater-Ansicht</h2>
+              <div className="clinical-grid">
+                <div className="clinical-metric">
+                  <span className="clinical-label">Einträge</span>
+                  <strong>{meals.length + symptoms.length + wellbeing.length}</strong>
+                </div>
+                <div className="clinical-metric">
+                  <span className="clinical-label">Durchschnittliche Symptomstärke</span>
+                  <strong>{averageSymptomValue}</strong>
+                </div>
+                <div className="clinical-metric">
+                  <span className="clinical-label">Häufigstes Symptom</span>
+                  <strong>{mostFrequentSymptom}</strong>
+                </div>
+                <div className="clinical-metric">
+                  <span className="clinical-label">Letztes Wohlbefinden</span>
+                  <strong>{latestWellbeing ? `${wellbeingLabels[latestWellbeing.value] || latestWellbeing.value}` : 'Keine Daten'}</strong>
+                </div>
+              </div>
+
+              <div className="clinical-detail-list">
+                <div>
+                  <span className="clinical-label">Aktuelle Mahlzeiten</span>
+                  <p>{recentMealNames}</p>
+                </div>
+                <div>
+                  <span className="clinical-label">Letzte Mahlzeit</span>
+                  <p>{latestMeal ? `${latestMeal.name} · ${formatDateTimeBerlin(latestMeal.eaten_at)}` : 'Keine Mahlzeiten'}</p>
+                </div>
+                <div>
+                  <span className="clinical-label">Erfassungs-Tage</span>
+                  <p>{trackingDays}</p>
+                </div>
+              </div>
+            </section>
+          </section>
+        )}
+
+        {route !== 'admin' && activeTab === 'start' && (
           <>
             <section className="card hero-card">
               <div className="hero-text">
                 <span className="hero-emoji">🌞</span>
                 <div>
-                  <h2>Hallo du!</h2>
-                  <p>Wie geht’s heute?</p>
+                  <h2>{activeUserName || 'Hallo!'}</h2>
+                  <p>Dein heutiges Tagebuch</p>
                 </div>
               </div>
 
@@ -700,18 +1303,10 @@ function App() {
 
               </div>
 
-              <div className="row user-creator-row">
-                <input
-                  value={form.username}
-                  onChange={(event) => setForm({ ...form, username: event.target.value })}
-                  placeholder="Neuen Benutzer anlegen"
-                />
-                <button onClick={handleUserSave}>Speichern</button>
-              </div>
             </section>
 
             <section className="card game-card">
-              <h2>Was möchtest du heute tun?</h2>
+              <h2>Was steckt heute in deinem Tagebuch?</h2>
               <div className="quick-grid">
                 {quickActions.map((action) => (
                   <button
@@ -748,26 +1343,33 @@ function App() {
           </>
         )}
 
-        {activeTab === 'meal' && (
+        {route !== 'admin' && activeTab === 'meal' && (
           <section className="card">
             <h2>Mahlzeit erfassen</h2>
             <form onSubmit={handleMealSubmit} className="stack">
               <input
                 value={form.mealName}
-                onChange={(event) => setForm({ ...form, mealName: event.target.value })}
+                onChange={(event) => {
+                  setLastSavedMeal('');
+                  setForm({ ...form, mealName: event.target.value });
+                }}
                 placeholder="Essen"
               />
               <TimeStampRow
                 label="Wann war das?"
                 value={form.eatenAt}
-                onChange={(value) => setForm({ ...form, eatenAt: value })}
+                onChange={(value) => {
+                  setLastSavedMeal('');
+                  setForm({ ...form, eatenAt: value });
+                }}
               />
               <button type="submit">Speichern</button>
+              {lastSavedMeal && <p className="status">Gespeichert: {lastSavedMeal}</p>}
             </form>
           </section>
         )}
 
-        {activeTab === 'mood' && (
+        {route !== 'admin' && activeTab === 'mood' && (
           <>
             <section className="card">
               <h2>Symptome & Stress</h2>
@@ -826,7 +1428,7 @@ function App() {
           </>
         )}
 
-        {activeTab === 'history' && (
+        {route !== 'admin' && activeTab === 'history' && (
           <>
             <section className="card clinical-card">
               <h2>Arzt-/Berater-Ansicht</h2>
@@ -866,7 +1468,7 @@ function App() {
             </section>
 
             <section className="card">
-              <h2>Verlauf & Export</h2>
+              <h2>Verlauf</h2>
               <div className="sync-banner">
                 <span className={syncInfo.isOffline ? 'sync-status offline' : 'sync-status online'}>
                   {syncInfo.isOffline
@@ -879,63 +1481,33 @@ function App() {
                   Jetzt synchronisieren
                 </button>
               </div>
-              <div className="history-actions">
-                <button type="button" onClick={() => handleExportCsv('clinical')}>
-                  Arzt-/Berater-Export
-                </button>
-                <button type="button" onClick={() => handleExportCsv('standard')}>
-                  Standard-CSV exportieren
-                </button>
-                <label className="import-button">
-                  CSV importieren
-                  <input type="file" accept=".csv,text/csv" onChange={handleImportCsv} />
-                </label>
-              </div>
 
               <div className="summary-grid">
-              <div>
-                <h3>Mahlzeiten</h3>
-                <ul>
-                  {meals.length ? meals.map((meal) => (
-                    <li key={meal.id}>
-                      {meal.name} · {formatDateTimeBerlin(meal.eaten_at)}
-                    </li>
-                  )) : <li>Keine Daten</li>}
-                </ul>
-              </div>
-              <div>
-                <h3>Symptome</h3>
-                <ul>
-                  {symptoms.length ? symptoms.map((item) => {
-                    const symptomMeta = symptomTypeMeta[item.type] ?? { label: item.type, emoji: '😵' };
+                {['today', 'yesterday', 'older'].map((groupKey) => {
+                  const groupLabel = groupKey === 'today' ? 'Heute' : groupKey === 'yesterday' ? 'Gestern' : 'Älter';
+                  const items = historyGroups[groupKey];
 
-                    return (
-                      <li key={item.id}>
-                        <span className="entry-badge">{symptomMeta.emoji} {symptomMeta.label}</span>
-                        <span>{symptomLabels[item.value] ?? item.value}</span>
-                        <small>{formatDateTimeBerlin(item.timestamp)}</small>
-                      </li>
-                    );
-                  }) : <li>Keine Daten</li>}
-                </ul>
+                  return (
+                    <div key={groupKey}>
+                      <h3>{groupLabel}</h3>
+                      <ul>
+                        {items.length ? items.map((item) => (
+                          <li key={item.id}>
+                            <span className="entry-badge">{item.icon} {item.label}</span>
+                            <span>{item.value}</span>
+                            <small>{formatDateTimeBerlin(item.timestamp)}</small>
+                          </li>
+                        )) : <li>Keine Daten</li>}
+                      </ul>
+                    </div>
+                  );
+                })}
               </div>
-              <div>
-                <h3>Wohlbefinden</h3>
-                <ul>
-                  {wellbeing.length ? wellbeing.map((item) => (
-                    <li key={item.id}>
-                      <span className="entry-badge mood">{wellbeingEmojis[item.value] ?? item.value}</span>
-                      <small>{formatDateTimeBerlin(item.timestamp)}</small>
-                    </li>
-                  )) : <li>Keine Daten</li>}
-                </ul>
-              </div>
-            </div>
-          </section>
+            </section>
           </>
         )}
 
-        {status && <p className="status">{status}</p>}
+        {status && route !== 'admin' && <p className="status">{status}</p>}
       </main>
     </div>
   );
