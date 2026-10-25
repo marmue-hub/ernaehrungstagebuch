@@ -15,6 +15,46 @@ const initialState = {
   wellbeingValue: 2,
 };
 
+const symptomLabels = {
+  1: 'keine Beschwerden',
+  2: 'leichtes Unbehagen',
+  3: 'mittelmäßige Beschwerden',
+  4: 'starke Beschwerden',
+  5: 'ich könnte sterben',
+};
+
+const wellbeingEmojis = {
+  1: '😕',
+  2: '🙂',
+  3: '😄',
+};
+
+const formatDateTimeBerlin = (value) => {
+  if (!value) return '';
+
+  const date = new Date(value);
+  const formatter = new Intl.DateTimeFormat('de-DE', {
+    timeZone: 'Europe/Berlin',
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(date);
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type !== 'literal') {
+      values[part.type] = part.value;
+    }
+  }
+
+  return `${values.day}.${values.month}.${values.year} ${values.hour}:${values.minute}`;
+};
+
 function App() {
   const [user, setUser] = useState(initialState.username);
   const [status, setStatus] = useState('');
@@ -195,7 +235,7 @@ function App() {
               value={form.symptomValue}
               onChange={(event) => setForm({ ...form, symptomValue: event.target.value })}
             />
-            <p>Wert: {form.symptomValue}</p>
+            <p>{symptomLabels[form.symptomValue]}</p>
             <button type="submit">Speichern</button>
           </form>
         </section>
@@ -210,7 +250,7 @@ function App() {
               value={form.wellbeingValue}
               onChange={(event) => setForm({ ...form, wellbeingValue: event.target.value })}
             />
-            <p>Wert: {form.wellbeingValue}</p>
+            <p>{wellbeingEmojis[form.wellbeingValue]}</p>
             <button type="submit">Speichern</button>
           </form>
         </section>
@@ -221,19 +261,27 @@ function App() {
             <div>
               <h3>Mahlzeiten</h3>
               <ul>
-                {meals.length ? meals.map((meal) => <li key={meal.id}>{meal.name}</li>) : <li>Keine Daten</li>}
+                {meals.length ? meals.map((meal) => (
+                  <li key={meal.id}>
+                    {meal.name} · {formatDateTimeBerlin(meal.eaten_at)}
+                  </li>
+                )) : <li>Keine Daten</li>}
               </ul>
             </div>
             <div>
               <h3>Symptome</h3>
               <ul>
-                {symptoms.length ? symptoms.map((item) => <li key={item.id}>{item.type}: {item.value}</li>) : <li>Keine Daten</li>}
+                {symptoms.length ? symptoms.map((item) => (
+                  <li key={item.id}>{item.type}: {symptomLabels[item.value] ?? item.value}</li>
+                )) : <li>Keine Daten</li>}
               </ul>
             </div>
             <div>
               <h3>Wohlbefinden</h3>
               <ul>
-                {wellbeing.length ? wellbeing.map((item) => <li key={item.id}>Wert: {item.value}</li>) : <li>Keine Daten</li>}
+                {wellbeing.length ? wellbeing.map((item) => (
+                  <li key={item.id}>{wellbeingEmojis[item.value] ?? item.value}</li>
+                )) : <li>Keine Daten</li>}
               </ul>
             </div>
           </div>
