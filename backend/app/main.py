@@ -15,10 +15,9 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title=settings.app_name)
 
 origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://wiegehts.x73.eu",
-    "https://wiegehts.x73.eu",
+    origin.strip()
+    for origin in settings.cors_origins.split(",")
+    if origin.strip()
 ]
 
 app.add_middleware(

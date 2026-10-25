@@ -19,6 +19,10 @@ services:
     build: ./backend
     env_file:
       - ./backend/.env.example
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:secret@postgres:5432/ernaehrungstagebuch
+      APP_NAME: Ernährungstagebuch
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost,http://wiegehts.x73.eu
     depends_on:
       postgres:
         condition: service_healthy

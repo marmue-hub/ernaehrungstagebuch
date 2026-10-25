@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_URL = import.meta.env.VITE_API_URL || (
+  window.location.hostname === 'localhost' && window.location.port === '5173'
+    ? 'http://localhost:8000'
+    : window.location.origin
+);
 
 const initialState = {
   username: '',
