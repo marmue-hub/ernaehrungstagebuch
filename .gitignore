@@ -17,5 +17,10 @@ frontend/.env
 # OS
 .DS_Store
 
+# Local runtime artifacts
+app.db
+backend/app.db
+caddy/
+
 # Docker volumes
 postgres_data/
