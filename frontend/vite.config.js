@@ -6,6 +6,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    allowedHosts: ['wiegehts.x73.eu'],
     proxy: {
       '/api': {
         target: 'http://backend:8000',
@@ -16,5 +17,6 @@ export default defineConfig({
   preview: {
     host: '0.0.0.0',
     port: 4173,
+    allowedHosts: ['wiegehts.x73.eu'],
   },
 });
