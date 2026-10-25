@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 const API_URL = import.meta.env.VITE_API_URL || (
   window.location.hostname === 'localhost' && window.location.port === '5173'
     ? 'http://localhost:8000'
-    : window.location.origin
+    : ''
 );
 
 const SYNC_QUEUE_KEY = 'ernaehrungstagebuch-sync-queue';
@@ -580,8 +580,35 @@ function App() {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    setStatus(`Datei ausgewählt: ${file.name}. Import wird in dieser Version vorbereitet.`);
-    event.target.value = '';
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const importUrl = selectedUserId
+        ? `${API_URL}/api/import/csv?user_id=${selectedUserId}`
+        : `${API_URL}/api/import/csv`;
+
+      const response = await fetch(importUrl, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'CSV Import fehlgeschlagen');
+      }
+
+      const payload = await response.json();
+      const summary = payload.imported || {};
+      setStatus(
+        `CSV importiert: ${summary.meals ?? 0} Mahlzeiten, ${summary.symptoms ?? 0} Symptome, ${summary.wellbeing ?? 0} Wohlbefinden.`
+      );
+      fetchData();
+    } catch (error) {
+      setStatus(error.message || 'CSV Import fehlgeschlagen');
+    } finally {
+      event.target.value = '';
+    }
   };
 
   const averageSymptomValue = symptoms.length
