@@ -60,7 +60,7 @@ class WellbeingOut(BaseModel):
 
 
 class ReminderOut(BaseModel):
-    id: int
+    id: str
     user_id: int
     meal_id: int
     reminder_type: str

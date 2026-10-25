@@ -6,10 +6,79 @@ const API_URL = import.meta.env.VITE_API_URL || (
     : window.location.origin
 );
 
+const formatBerlinDateTimeForInput = (date = new Date()) => {
+  const formatter = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Europe/Berlin',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(date);
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type !== 'literal') {
+      values[part.type] = part.value;
+    }
+  }
+
+  return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}`;
+};
+
+const getBerlinOffsetMs = (date) => {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Berlin',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(date);
+  const values = {};
+
+  for (const part of parts) {
+    if (part.type !== 'literal') {
+      values[part.type] = part.value;
+    }
+  }
+
+  const berlinUtcMs = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second || 0),
+  );
+
+  return berlinUtcMs - date.getTime();
+};
+
+const toBerlinIsoString = (value) => {
+  if (!value) return new Date().toISOString();
+
+  const [datePart, timePart] = value.split('T');
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hour, minute] = timePart.split(':').map(Number);
+
+  const localUtcMs = Date.UTC(year, month - 1, day, hour, minute);
+  const offsetMs = getBerlinOffsetMs(new Date(localUtcMs));
+
+  return new Date(localUtcMs - offsetMs).toISOString();
+};
+
 const initialState = {
   username: '',
   mealName: '',
-  eatenAt: new Date().toISOString().slice(0, 16),
+  eatenAt: formatBerlinDateTimeForInput(),
   symptomType: 'bauchweh',
   symptomValue: 3,
   wellbeingValue: 2,
@@ -120,7 +189,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: form.mealName,
-          eaten_at: new Date(form.eatenAt).toISOString(),
+          eaten_at: toBerlinIsoString(form.eatenAt),
           notes: '',
         }),
       });

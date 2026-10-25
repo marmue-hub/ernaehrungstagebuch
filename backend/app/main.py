@@ -1,7 +1,9 @@
-from datetime import datetime
+import csv
+import io
+from datetime import datetime, timedelta
 from typing import List
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -125,11 +127,58 @@ def create_wellbeing(payload: schemas.WellbeingCreate, db: Session = Depends(get
     return entry
 
 
+def build_reminder_entries_for_meal(meal: models.Meal):
+    scheduled = [
+        ("1h", meal.eaten_at + timedelta(hours=1)),
+        ("4h", meal.eaten_at + timedelta(hours=4)),
+    ]
+
+    return [
+        {
+            "id": f"{meal.id}-{label}",
+            "user_id": meal.user_id,
+            "meal_id": meal.id,
+            "reminder_type": label,
+            "scheduled_at": scheduled_at,
+            "status": "pending",
+            "sent_at": None,
+        }
+        for label, scheduled_at in scheduled
+    ]
+
+
 @app.get("/api/reminders", response_model=List[schemas.ReminderOut])
 def get_reminders(db: Session = Depends(get_db)):
-    return []
+    meals = db.query(models.Meal).order_by(models.Meal.eaten_at.asc()).all()
+    reminders = []
+    for meal in meals:
+        reminders.extend(build_reminder_entries_for_meal(meal))
+    return reminders
 
 
 @app.post("/api/reminders", response_model=schemas.ReminderOut, status_code=status.HTTP_201_CREATED)
 def create_reminder(db: Session = Depends(get_db)):
     raise HTTPException(status_code=501, detail="Reminder-Logik wird im MVP noch ergänzt")
+
+
+@app.get("/api/export/csv")
+def export_csv(db: Session = Depends(get_db)):
+    meals = db.query(models.Meal).order_by(models.Meal.eaten_at.desc()).all()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "name", "eaten_at", "notes", "created_at", "updated_at"])
+
+    for meal in meals:
+        writer.writerow([
+            meal.id,
+            meal.name,
+            meal.eaten_at.isoformat() if hasattr(meal.eaten_at, "isoformat") else meal.eaten_at,
+            meal.notes or "",
+            meal.created_at.isoformat() if hasattr(meal.created_at, "isoformat") else meal.created_at,
+            meal.updated_at.isoformat() if hasattr(meal.updated_at, "isoformat") else meal.updated_at,
+        ])
+
+    content = output.getvalue()
+    return Response(content=content, media_type="text/csv", headers={
+        "Content-Disposition": "attachment; filename=ernaehrungstagebuch-export.csv"
+    })
