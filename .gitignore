@@ -1,6 +1,7 @@
 # Node
 frontend/node_modules/
 frontend/dist/
+frontend/dist-test/
 frontend/.vite/
 
 # Python
@@ -20,6 +21,7 @@ frontend/.env
 # Local runtime artifacts
 app.db
 backend/app.db
+backend/test.db
 caddy/
 
 # Docker volumes

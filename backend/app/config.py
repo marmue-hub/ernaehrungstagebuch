@@ -3,10 +3,25 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "Ernährungstagebuch"
+    app_env: str = "development"
     database_url: str = "sqlite:///./app.db"
-    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost,http://wiegehts.x73.eu"
+    test_database_url: str | None = None
+    production_database_url: str | None = None
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost,http://wiegehts.x73.eu,https://wiegehts.x73.eu,https://www.wiegehts.x73.eu"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def effective_database_url(self) -> str:
+        environment = (self.app_env or "development").lower()
+
+        if environment == "test" and self.test_database_url:
+            return self.test_database_url
+
+        if environment == "production" and self.production_database_url:
+            return self.production_database_url
+
+        return self.database_url
 
 
 settings = Settings()

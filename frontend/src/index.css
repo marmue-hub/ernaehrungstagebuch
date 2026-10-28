@@ -595,3 +595,8 @@ ul li small {
   color: #1d5b40;
   border: 1px solid #c8ecd5;
 }
+
+.pending-badge {
+  color: #9a6a00;
+  white-space: nowrap;
+}

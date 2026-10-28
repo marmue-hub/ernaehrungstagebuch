@@ -1,32 +1,195 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-const API_URL = import.meta.env.VITE_API_URL || (
-  window.location.hostname === 'localhost' && window.location.port === '5173'
-    ? 'http://localhost:8000'
-    : ''
+const APP_ENV = import.meta.env.VITE_APP_ENV || (
+  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'development'
+    : 'production'
 );
 
-const SYNC_QUEUE_KEY = 'ernaehrungstagebuch-sync-queue';
+const API_URL = import.meta.env.VITE_API_URL || (
+  APP_ENV === 'production'
+    ? ''
+    : 'http://localhost:8000'
+);
 
-const readSyncQueue = () => {
+// Only reachable from the home network: synchronisation happens exclusively there.
+const HOME_CHECK_URL = import.meta.env.VITE_HOME_CHECK_URL ?? (
+  APP_ENV === 'production' ? 'https://www.wiegehts.x73.eu/' : ''
+);
+const HOME_CHECK_TIMEOUT_MS = 4000;
+const HOME_CHECK_CACHE_MS = 30000;
+const AUTO_SYNC_INTERVAL_MS = 60000;
+
+const SYNC_QUEUE_KEY = 'ernaehrungstagebuch-sync-queue';
+const USERS_CACHE_KEY = 'ernaehrungstagebuch-users';
+const DATA_CACHE_KEY_PREFIX = 'ernaehrungstagebuch-cache-';
+const SYNC_QUEUE_DB = 'ernaehrungstagebuch-sync-db';
+const SYNC_QUEUE_STORE = 'sync-queue';
+
+const isNetworkError = (error) => error instanceof TypeError;
+const notInHomeNetworkError = () => new TypeError('Nicht im Heimnetz');
+
+let homeCheckResult = { checkedAt: 0, reachable: false };
+
+const isInHomeNetwork = async () => {
+  if (!navigator.onLine) return false;
+  if (!HOME_CHECK_URL) return true;
+  if (Date.now() - homeCheckResult.checkedAt < HOME_CHECK_CACHE_MS) return homeCheckResult.reachable;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), HOME_CHECK_TIMEOUT_MS);
+  let reachable = false;
+
   try {
-    const raw = localStorage.getItem(SYNC_QUEUE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    const url = new URL(HOME_CHECK_URL);
+    url.searchParams.set('__home_check', String(Date.now()));
+    // no-cors: an opaque response is enough to prove reachability
+    await fetch(url, { mode: 'no-cors', cache: 'no-store', signal: controller.signal });
+    reachable = true;
   } catch (error) {
-    return [];
+    reachable = false;
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  homeCheckResult = { checkedAt: Date.now(), reachable };
+  return reachable;
+};
+
+const readJsonFromStorage = (key, fallback) => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (error) {
+    return fallback;
   }
 };
 
-const writeSyncQueue = (queue) => {
-  localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue));
+// Shows queued, not yet synchronised changes on top of the server data.
+const applyPendingChanges = (entries, kind, queue, userId) => {
+  let result = [...entries];
+
+  for (const item of queue) {
+    if (item.kind !== kind) continue;
+
+    if (item.action === 'delete') {
+      result = result.filter((entry) => entry.id !== item.payload.id);
+    } else if (item.action === 'update') {
+      result = result.map((entry) => (
+        entry.id === item.payload.id ? { ...entry, ...item.payload, pending: true } : entry
+      ));
+    } else if (item.payload?.user_id === userId) {
+      result.push({ ...item.payload, id: `pending-${item.id}`, pending: true });
+    }
+  }
+
+  return result;
 };
 
-const queuePendingEntry = (kind, payload) => {
-  const queue = readSyncQueue();
-  queue.push({ kind, payload, created_at: new Date().toISOString() });
-  writeSyncQueue(queue);
+const openSyncQueueDatabase = () => new Promise((resolve, reject) => {
+  if (!('indexedDB' in window)) {
+    resolve(null);
+    return;
+  }
+
+  const request = window.indexedDB.open(SYNC_QUEUE_DB, 1);
+
+  request.onupgradeneeded = (event) => {
+    const db = event.target.result;
+    if (!db.objectStoreNames.contains(SYNC_QUEUE_STORE)) {
+      db.createObjectStore(SYNC_QUEUE_STORE, { keyPath: 'id' });
+    }
+  };
+
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error || new Error('IndexedDB konnte nicht geöffnet werden'));
+});
+
+const readLegacySyncQueue = () => {
+  const parsed = readJsonFromStorage(SYNC_QUEUE_KEY, []);
+  return Array.isArray(parsed)
+    ? parsed.filter((item) => item && item.kind && item.payload).map((item) => ({ action: 'create', ...item }))
+    : [];
+};
+
+const withQueueIds = (queue) => queue.map((entry, index) => ({
+  ...entry,
+  id: entry.id || `${entry.kind}-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
+  order: index,
+}));
+
+const readQueueFromDatabase = (db) => new Promise((resolve, reject) => {
+  const transaction = db.transaction(SYNC_QUEUE_STORE, 'readonly');
+  const request = transaction.objectStore(SYNC_QUEUE_STORE).getAll();
+
+  request.onsuccess = () => {
+    const result = Array.isArray(request.result) ? request.result : [];
+    resolve(result.sort((a, b) => (a.order ?? 0) - (b.order ?? 0)));
+  };
+  request.onerror = () => reject(request.error || new Error('Sync-Queue konnte nicht gelesen werden'));
+});
+
+const writeQueueToDatabase = (db, queue) => new Promise((resolve, reject) => {
+  const transaction = db.transaction(SYNC_QUEUE_STORE, 'readwrite');
+  const store = transaction.objectStore(SYNC_QUEUE_STORE);
+  transaction.oncomplete = () => resolve(queue);
+  transaction.onerror = () => reject(transaction.error || new Error('Sync-Queue konnte nicht geschrieben werden'));
+
+  store.clear();
+  queue.forEach((entry) => store.put(entry));
+});
+
+const readSyncQueue = async () => {
+  let db = null;
+  try {
+    db = await openSyncQueueDatabase();
+    if (!db) return readLegacySyncQueue();
+
+    const stored = await readQueueFromDatabase(db);
+
+    // Entries queued by the former localStorage-only version
+    const legacyEntries = readLegacySyncQueue();
+    if (!legacyEntries.length) return stored;
+
+    const merged = await writeQueueToDatabase(db, withQueueIds([...stored, ...legacyEntries]));
+    localStorage.removeItem(SYNC_QUEUE_KEY);
+    return merged;
+  } catch (error) {
+    return readLegacySyncQueue();
+  } finally {
+    db?.close();
+  }
+};
+
+const writeSyncQueue = async (queue) => {
+  const entries = withQueueIds(queue);
+  let db = null;
+  try {
+    db = await openSyncQueueDatabase();
+    if (db) return await writeQueueToDatabase(db, entries);
+  } catch (error) {
+    // fall through to localStorage
+  } finally {
+    db?.close();
+  }
+
+  localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(entries));
+  return entries;
+};
+
+const queuePendingEntry = async (kind, payload, action = 'create', remoteId = null) => {
+  const queue = await readSyncQueue();
+  const nextEntry = {
+    id: `${kind}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    kind,
+    action,
+    remoteId,
+    payload,
+    created_at: new Date().toISOString(),
+  };
+
+  queue.push(nextEntry);
+  await writeSyncQueue(queue);
   return queue.length;
 };
 
@@ -211,6 +374,8 @@ function App() {
   const [meals, setMeals] = useState([]);
   const [symptoms, setSymptoms] = useState([]);
   const [wellbeing, setWellbeing] = useState([]);
+  const [pendingQueue, setPendingQueue] = useState([]);
+  const syncInProgress = useRef(false);
   const [form, setForm] = useState(initialState);
   const [lastSavedMeal, setLastSavedMeal] = useState('');
   const [activeTab, setActiveTab] = useState('start');
@@ -260,6 +425,7 @@ function App() {
       if (!response.ok) throw new Error('Benutzer konnten nicht geladen werden');
       const nextUsers = await response.json();
       setUsers(nextUsers);
+      localStorage.setItem(USERS_CACHE_KEY, JSON.stringify(nextUsers));
 
       if (!nextUsers.length) {
         setSelectedUserId(null);
@@ -279,8 +445,25 @@ function App() {
         setAdminTargetUserId(String(currentSelection));
       }
     } catch (error) {
-      setStatus(error.message);
+      const cachedUsers = readJsonFromStorage(USERS_CACHE_KEY, []);
+      if (!isNetworkError(error) || !cachedUsers.length) {
+        setStatus(error.message);
+        return;
+      }
+
+      setUsers(cachedUsers);
+      const cachedSelection = cachedUsers.find((item) => item.id === selectedUserId);
+      if (cachedSelection) {
+        setUser(cachedSelection.username);
+      }
+      setStatus('Offline: gespeicherte Benutzerliste wird verwendet.');
     }
+  };
+
+  const refreshPendingQueue = async () => {
+    const queue = await readSyncQueue();
+    setPendingQueue(queue);
+    return queue;
   };
 
   const fetchAdminEntries = async (targetUserId = adminTargetUserId) => {
@@ -329,66 +512,102 @@ function App() {
       setMeals(mealsData);
       setSymptoms(symptomsData);
       setWellbeing(wellbeingData);
-      localStorage.setItem('ernaehrungstagebuch-cache', JSON.stringify({
+      localStorage.setItem(`${DATA_CACHE_KEY_PREFIX}${selectedUserId}`, JSON.stringify({
         meals: mealsData,
         symptoms: symptomsData,
         wellbeing: wellbeingData,
       }));
       setSyncInfo({
         lastSyncAt: new Date().toISOString(),
-        pendingChanges: readSyncQueue().length,
+        pendingChanges: (await refreshPendingQueue()).length,
         isOffline: false,
       });
     } catch (error) {
-      const cached = JSON.parse(localStorage.getItem('ernaehrungstagebuch-cache') || '{"meals":[],"symptoms":[],"wellbeing":[]}');
+      const cached = readJsonFromStorage(`${DATA_CACHE_KEY_PREFIX}${selectedUserId}`, {});
+      const pendingChanges = (await refreshPendingQueue()).length;
       setMeals(cached.meals || []);
       setSymptoms(cached.symptoms || []);
       setWellbeing(cached.wellbeing || []);
       setSyncInfo((prev) => ({
         ...prev,
-        pendingChanges: readSyncQueue().length,
+        pendingChanges,
         isOffline: true,
       }));
-      setStatus('Backend nicht erreichbar. Lokale Daten werden angezeigt.');
+      setStatus('Server nicht erreichbar. Lokale Daten werden angezeigt.');
     }
   };
 
-  const syncQueuedEntries = async () => {
-    const queue = readSyncQueue().filter((item) => {
+  const syncQueuedEntries = async ({ silent = false } = {}) => {
+    if (syncInProgress.current) return;
+    syncInProgress.current = true;
+
+    try {
+      await runSync(silent === true);
+    } finally {
+      syncInProgress.current = false;
+    }
+  };
+
+  const runSync = async (silent) => {
+    const fullQueue = await refreshPendingQueue();
+    const belongsToCurrentUser = (item) => {
       if (!selectedUserId) return true;
-      return item.payload?.user_id === selectedUserId;
-    });
+      if (item.payload?.user_id === undefined) return true;
+      return item.payload.user_id === selectedUserId;
+    };
+    const queue = fullQueue.filter(belongsToCurrentUser);
+    const otherEntries = fullQueue.filter((item) => !belongsToCurrentUser(item));
 
     if (!queue.length) {
-      setSyncInfo((prev) => ({ ...prev, pendingChanges: 0, isOffline: !navigator.onLine }));
-      if (navigator.onLine) {
+      setSyncInfo((prev) => ({ ...prev, pendingChanges: 0 }));
+      if (!silent) {
         setStatus('Keine ausstehenden Synchronisierungen');
       }
       return;
     }
 
-    if (!navigator.onLine) {
+    homeCheckResult.checkedAt = 0;
+    if (!(await isInHomeNetwork())) {
       setSyncInfo((prev) => ({ ...prev, pendingChanges: queue.length, isOffline: true }));
-      setStatus('Gerät ist offline. Einträge bleiben lokal gespeichert.');
+      if (!silent) {
+        setStatus('Nicht im Heimnetz. Einträge bleiben lokal gespeichert und werden zu Hause synchronisiert.');
+      }
       return;
     }
 
     const remaining = [];
     for (const item of queue) {
       try {
-        const endpoint = item.kind === 'meal'
-          ? '/api/meals'
+        const entityName = item.kind === 'meal'
+          ? 'meals'
           : item.kind === 'symptom'
-            ? '/api/symptoms'
-            : '/api/wellbeing';
+            ? 'symptoms'
+            : 'wellbeing';
 
-        const response = await fetch(`${API_URL}${endpoint}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(item.payload),
-        });
+        const isDelete = item.action === 'delete';
+        const isUpdate = item.action === 'update';
 
-        if (!response.ok) {
+        const baseUrl = `${API_URL}/api/${entityName}`;
+        let response;
+
+        if (isDelete) {
+          response = await fetch(`${baseUrl}/${item.payload.id}`, { method: 'DELETE' });
+        } else if (isUpdate) {
+          response = await fetch(`${baseUrl}/${item.payload.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(item.payload),
+          });
+        } else {
+          response = await fetch(baseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(item.payload),
+          });
+        }
+
+        // 404 on update/delete: entry no longer exists on the server, nothing left to sync
+        if (!response.ok && !((isDelete || isUpdate) && response.status === 404)) {
           throw new Error('Sync fehlgeschlagen');
         }
       } catch (error) {
@@ -396,7 +615,8 @@ function App() {
       }
     }
 
-    writeSyncQueue(remaining);
+    await writeSyncQueue([...otherEntries, ...remaining]);
+    setPendingQueue([...otherEntries, ...remaining]);
     setSyncInfo({
       lastSyncAt: new Date().toISOString(),
       pendingChanges: remaining.length,
@@ -429,13 +649,26 @@ function App() {
   useEffect(() => {
     if (selectedUserId === null) return;
     fetchData();
-    syncQueuedEntries();
+    syncQueuedEntries({ silent: true });
   }, [selectedUserId]);
 
   useEffect(() => {
     const handleOnline = () => {
-      syncQueuedEntries();
+      syncQueuedEntries({ silent: true });
     };
+
+    // Switching from mobile data to the home WLAN fires no 'online' event, so check regularly.
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncQueuedEntries({ silent: true });
+      }
+    };
+
+    const interval = setInterval(async () => {
+      if ((await readSyncQueue()).length) {
+        syncQueuedEntries({ silent: true });
+      }
+    }, AUTO_SYNC_INTERVAL_MS);
 
     const handleOffline = () => {
       setSyncInfo((prev) => ({ ...prev, isOffline: true }));
@@ -444,10 +677,13 @@ function App() {
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
+      clearInterval(interval);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [selectedUserId]);
 
@@ -494,11 +730,11 @@ function App() {
   const handleAdminEntrySave = async (type, entry) => {
     const key = `${type}-${entry.id}`;
     const draft = adminEntryDrafts[key] || {};
+    const payload = {
+      user_id: entry.user_id,
+    };
 
     try {
-      const payload = {
-        user_id: entry.user_id,
-      };
 
       if (type === 'meal') {
         payload.name = (draft.name ?? entry.name).trim();
@@ -517,6 +753,8 @@ function App() {
         payload.timestamp = new Date(draft.timestamp ?? entry.timestamp).toISOString();
       }
 
+      if (!(await isInHomeNetwork())) throw notInHomeNetworkError();
+
       const response = await fetch(`${API_URL}/api/${type === 'meal' ? 'meals' : type === 'symptom' ? 'symptoms' : 'wellbeing'}/${entry.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -531,12 +769,20 @@ function App() {
       setStatus('Eintrag gespeichert');
       await fetchAdminEntries(adminTargetUserId);
     } catch (error) {
-      setStatus(error.message || 'Eintrag konnte nicht gespeichert werden');
+      if (!isNetworkError(error)) {
+        setStatus(error.message || 'Eintrag konnte nicht gespeichert werden');
+        return;
+      }
+      await queuePendingEntry(type, { ...payload, id: entry.id }, 'update');
+      await refreshPendingQueue();
+      setStatus('Eintrag lokal gespeichert und wird synchronisiert, sobald die Verbindung wieder da ist.');
     }
   };
 
   const handleAdminEntryDelete = async (type, entryId) => {
     try {
+      if (!(await isInHomeNetwork())) throw notInHomeNetworkError();
+
       const response = await fetch(`${API_URL}/api/${type === 'meal' ? 'meals' : type === 'symptom' ? 'symptoms' : 'wellbeing'}/${entryId}`, {
         method: 'DELETE',
       });
@@ -549,7 +795,13 @@ function App() {
       setStatus('Eintrag gelöscht');
       await fetchAdminEntries(adminTargetUserId);
     } catch (error) {
-      setStatus(error.message || 'Eintrag konnte nicht gelöscht werden');
+      if (!isNetworkError(error)) {
+        setStatus(error.message || 'Eintrag konnte nicht gelöscht werden');
+        return;
+      }
+      await queuePendingEntry(type, { id: entryId }, 'delete');
+      await refreshPendingQueue();
+      setStatus('Löschen lokal vermerkt und wird synchronisiert, sobald die Verbindung wieder da ist.');
     }
   };
 
@@ -569,6 +821,8 @@ function App() {
     };
 
     try {
+      if (!(await isInHomeNetwork())) throw notInHomeNetworkError();
+
       const response = await fetch(`${API_URL}/api/meals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -581,24 +835,27 @@ function App() {
       const savedMealTime = formatDateTimeBerlin(payload.eaten_at);
       setForm((prev) => ({ ...prev, mealName: '' }));
       setLastSavedMeal(`${savedMealName} · ${savedMealTime}`);
+      const queueCount = (await readSyncQueue()).length;
       setSyncInfo({
         lastSyncAt: new Date().toISOString(),
-        pendingChanges: readSyncQueue().length,
+        pendingChanges: queueCount,
         isOffline: false,
       });
       setStatus(`Gespeichert: ${savedMealName} · ${savedMealTime}`);
       fetchData();
     } catch (error) {
-      queuePendingEntry('meal', payload);
+      await queuePendingEntry('meal', payload, 'create');
+      const pendingAfterQueue = await refreshPendingQueue();
       const savedMealName = payload.name?.trim() || 'Mahlzeit';
       const savedMealTime = formatDateTimeBerlin(payload.eaten_at);
+      setForm((prev) => ({ ...prev, mealName: '' }));
       setLastSavedMeal(`Lokal gespeichert: ${savedMealName} · ${savedMealTime}`);
       setSyncInfo({
         lastSyncAt: syncInfo.lastSyncAt,
-        pendingChanges: readSyncQueue().length,
+        pendingChanges: pendingAfterQueue.length,
         isOffline: true,
       });
-      setStatus('Mahlzeit lokal gespeichert. Synchronisierung ausstehend.');
+      setStatus('Mahlzeit lokal gespeichert. Wird im Heimnetz synchronisiert.');
     }
   };
 
@@ -618,6 +875,8 @@ function App() {
     };
 
     try {
+      if (!(await isInHomeNetwork())) throw notInHomeNetworkError();
+
       const response = await fetch(`${API_URL}/api/symptoms`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -626,21 +885,23 @@ function App() {
 
       if (!response.ok) throw new Error('Symptom konnte nicht gespeichert werden');
 
+      const queueCount = (await readSyncQueue()).length;
       setSyncInfo({
         lastSyncAt: new Date().toISOString(),
-        pendingChanges: readSyncQueue().length,
+        pendingChanges: queueCount,
         isOffline: false,
       });
       setStatus('Symptom gespeichert');
       fetchData();
     } catch (error) {
-      queuePendingEntry('symptom', payload);
+      await queuePendingEntry('symptom', payload, 'create');
+      const pendingAfterQueue = await refreshPendingQueue();
       setSyncInfo({
         lastSyncAt: syncInfo.lastSyncAt,
-        pendingChanges: readSyncQueue().length,
+        pendingChanges: pendingAfterQueue.length,
         isOffline: true,
       });
-      setStatus('Symptom lokal gespeichert. Synchronisierung ausstehend.');
+      setStatus('Symptom lokal gespeichert. Wird im Heimnetz synchronisiert.');
     }
   };
 
@@ -659,6 +920,8 @@ function App() {
     };
 
     try {
+      if (!(await isInHomeNetwork())) throw notInHomeNetworkError();
+
       const response = await fetch(`${API_URL}/api/wellbeing`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -667,21 +930,23 @@ function App() {
 
       if (!response.ok) throw new Error('Wohlbefinden konnte nicht gespeichert werden');
 
+      const queueCount = (await readSyncQueue()).length;
       setSyncInfo({
         lastSyncAt: new Date().toISOString(),
-        pendingChanges: readSyncQueue().length,
+        pendingChanges: queueCount,
         isOffline: false,
       });
       setStatus('Wohlbefinden gespeichert');
       fetchData();
     } catch (error) {
-      queuePendingEntry('wellbeing', payload);
+      await queuePendingEntry('wellbeing', payload, 'create');
+      const pendingAfterQueue = await refreshPendingQueue();
       setSyncInfo({
         lastSyncAt: syncInfo.lastSyncAt,
-        pendingChanges: readSyncQueue().length,
+        pendingChanges: pendingAfterQueue.length,
         isOffline: true,
       });
-      setStatus('Wohlbefinden lokal gespeichert. Synchronisierung ausstehend.');
+      setStatus('Wohlbefinden lokal gespeichert. Wird im Heimnetz synchronisiert.');
     }
   };
 
@@ -914,12 +1179,16 @@ function App() {
     }
   };
 
-  const averageSymptomValue = symptoms.length
-    ? (symptoms.reduce((sum, item) => sum + Number(item.value || 0), 0) / symptoms.length).toFixed(1)
+  const visibleMeals = applyPendingChanges(meals, 'meal', pendingQueue, selectedUserId);
+  const visibleSymptoms = applyPendingChanges(symptoms, 'symptom', pendingQueue, selectedUserId);
+  const visibleWellbeing = applyPendingChanges(wellbeing, 'wellbeing', pendingQueue, selectedUserId);
+
+  const averageSymptomValue = visibleSymptoms.length
+    ? (visibleSymptoms.reduce((sum, item) => sum + Number(item.value || 0), 0) / visibleSymptoms.length).toFixed(1)
     : '0.0';
 
   const symptomBreakdown = Object.entries(
-    symptoms.reduce((accumulator, item) => {
+    visibleSymptoms.reduce((accumulator, item) => {
       const key = item.type || 'unbekannt';
       accumulator[key] = (accumulator[key] || 0) + 1;
       return accumulator;
@@ -930,9 +1199,9 @@ function App() {
     ? `${symptomTypeMeta[symptomBreakdown[0][0]]?.label || symptomBreakdown[0][0]} (${symptomBreakdown[0][1]}x)`
     : 'Keine Symptome';
 
-  const sortedMeals = [...meals].sort((a, b) => new Date(b.eaten_at || b.timestamp) - new Date(a.eaten_at || a.timestamp));
-  const sortedSymptoms = [...symptoms].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-  const sortedWellbeing = [...wellbeing].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const sortedMeals = [...visibleMeals].sort((a, b) => new Date(b.eaten_at || b.timestamp) - new Date(a.eaten_at || a.timestamp));
+  const sortedSymptoms = [...visibleSymptoms].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  const sortedWellbeing = [...visibleWellbeing].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
   const latestWellbeing = sortedWellbeing[0];
   const latestMeal = sortedMeals[0];
@@ -949,6 +1218,7 @@ function App() {
       icon: '🍽️',
       value: meal.name,
       timestamp: meal.eaten_at,
+      pending: meal.pending,
     })),
     ...sortedSymptoms.map((item) => {
       const symptomMeta = symptomTypeMeta[item.type] ?? { label: item.type, emoji: '😵' };
@@ -959,6 +1229,7 @@ function App() {
         icon: symptomMeta.emoji,
         value: symptomLabels[item.value] ?? item.value,
         timestamp: item.timestamp,
+        pending: item.pending,
       };
     }),
     ...sortedWellbeing.map((item) => ({
@@ -968,6 +1239,7 @@ function App() {
       icon: wellbeingEmojis[item.value] ?? '🙂',
       value: wellbeingLabels[item.value] ?? item.value,
       timestamp: item.timestamp,
+      pending: item.pending,
     })),
   ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
@@ -1230,7 +1502,7 @@ function App() {
               <div className="clinical-grid">
                 <div className="clinical-metric">
                   <span className="clinical-label">Einträge</span>
-                  <strong>{meals.length + symptoms.length + wellbeing.length}</strong>
+                  <strong>{visibleMeals.length + visibleSymptoms.length + visibleWellbeing.length}</strong>
                 </div>
                 <div className="clinical-metric">
                   <span className="clinical-label">Durchschnittliche Symptomstärke</span>
@@ -1328,15 +1600,15 @@ function App() {
               <div className="stat-grid">
                 <div className="stat-box">
                   <span className="stat-label">Mahlzeiten</span>
-                  <strong>{meals.length}</strong>
+                  <strong>{visibleMeals.length}</strong>
                 </div>
                 <div className="stat-box">
                   <span className="stat-label">Symptome</span>
-                  <strong>{symptoms.length}</strong>
+                  <strong>{visibleSymptoms.length}</strong>
                 </div>
                 <div className="stat-box">
                   <span className="stat-label">Stimmung</span>
-                  <strong>{wellbeing.length}</strong>
+                  <strong>{visibleWellbeing.length}</strong>
                 </div>
               </div>
             </section>
@@ -1435,7 +1707,7 @@ function App() {
               <div className="clinical-grid">
                 <div className="clinical-metric">
                   <span className="clinical-label">Einträge</span>
-                  <strong>{meals.length + symptoms.length + wellbeing.length}</strong>
+                  <strong>{visibleMeals.length + visibleSymptoms.length + visibleWellbeing.length}</strong>
                 </div>
                 <div className="clinical-metric">
                   <span className="clinical-label">Durchschnittliche Symptomstärke</span>
@@ -1496,6 +1768,7 @@ function App() {
                             <span className="entry-badge">{item.icon} {item.label}</span>
                             <span>{item.value}</span>
                             <small>{formatDateTimeBerlin(item.timestamp)}</small>
+                            {item.pending && <small className="pending-badge">⏳ wartet auf Sync</small>}
                           </li>
                         )) : <li>Keine Daten</li>}
                       </ul>

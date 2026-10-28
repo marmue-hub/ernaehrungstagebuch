@@ -22,7 +22,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://app:secret@postgres:5432/ernahrungstagebuch
       APP_NAME: Ernährungstagebuch
-      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost,http://wiegehts.x73.eu,https://wiegehts.x73.eu
+      CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost,http://wiegehts.x73.eu,https://wiegehts.x73.eu,https://www.wiegehts.x73.eu
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,11 +39,12 @@ services:
     ports:
       - "127.0.0.1:5173:5173"
     environment:
+      VITE_APP_ENV: production
       VITE_API_URL: ""
     volumes:
       - ./frontend:/app
       - /app/node_modules
-    command: npm run dev -- --host 0.0.0.0
+    command: sh -c "npm run build && npm run preview -- --host 0.0.0.0 --port 5173 --strictPort"
 
 volumes:
   postgres_data:
