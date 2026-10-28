@@ -600,3 +600,16 @@ ul li small {
   color: #9a6a00;
   white-space: nowrap;
 }
+
+.logout-button {
+  margin-left: auto;
+  padding: 0.32rem 0.68rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: white;
+  font-weight: 700;
+  font-size: 0.72rem;
+  box-shadow: none;
+  min-height: 0;
+}

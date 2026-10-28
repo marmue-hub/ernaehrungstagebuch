@@ -26,7 +26,34 @@ const DATA_CACHE_KEY_PREFIX = 'ernaehrungstagebuch-cache-';
 const SYNC_QUEUE_DB = 'ernaehrungstagebuch-sync-db';
 const SYNC_QUEUE_STORE = 'sync-queue';
 
+const AUTH_TOKEN_KEY = 'ernaehrungstagebuch-auth-token';
+
 const isNetworkError = (error) => error instanceof TypeError;
+
+const readAuthToken = () => {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_KEY) || '';
+  } catch (error) {
+    return '';
+  }
+};
+
+// Set by App: shows the login screen when the server rejects the token
+let handleUnauthorized = () => {};
+
+const apiFetch = async (url, options = {}) => {
+  const headers = new Headers(options.headers || {});
+  const token = readAuthToken();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(url, { ...options, headers });
+  if (response.status === 401) {
+    handleUnauthorized();
+  }
+  return response;
+};
 const notInHomeNetworkError = () => new TypeError('Nicht im Heimnetz');
 
 let homeCheckResult = { checkedAt: 0, reachable: false };
@@ -375,6 +402,9 @@ function App() {
   const [symptoms, setSymptoms] = useState([]);
   const [wellbeing, setWellbeing] = useState([]);
   const [pendingQueue, setPendingQueue] = useState([]);
+  const [needsLogin, setNeedsLogin] = useState(() => !readAuthToken());
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
   const syncInProgress = useRef(false);
   const [form, setForm] = useState(initialState);
   const [lastSavedMeal, setLastSavedMeal] = useState('');
@@ -421,7 +451,7 @@ function App() {
 
   const fetchUsers = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/users`);
+      const response = await apiFetch(`${API_URL}/api/users`);
       if (!response.ok) throw new Error('Benutzer konnten nicht geladen werden');
       const nextUsers = await response.json();
       setUsers(nextUsers);
@@ -471,9 +501,9 @@ function App() {
 
     try {
       const [mealRes, symptomRes, wellbeingRes] = await Promise.all([
-        fetch(`${API_URL}/api/meals${normalizedUserId ? `?user_id=${normalizedUserId}` : ''}`),
-        fetch(`${API_URL}/api/symptoms${normalizedUserId ? `?user_id=${normalizedUserId}` : ''}`),
-        fetch(`${API_URL}/api/wellbeing${normalizedUserId ? `?user_id=${normalizedUserId}` : ''}`),
+        apiFetch(`${API_URL}/api/meals${normalizedUserId ? `?user_id=${normalizedUserId}` : ''}`),
+        apiFetch(`${API_URL}/api/symptoms${normalizedUserId ? `?user_id=${normalizedUserId}` : ''}`),
+        apiFetch(`${API_URL}/api/wellbeing${normalizedUserId ? `?user_id=${normalizedUserId}` : ''}`),
       ]);
 
       const mealsData = mealRes.ok ? await mealRes.json() : [];
@@ -500,10 +530,14 @@ function App() {
 
     try {
       const [mealRes, symptomRes, wellbeingRes] = await Promise.all([
-        fetch(`${API_URL}/api/meals?user_id=${selectedUserId}`),
-        fetch(`${API_URL}/api/symptoms?user_id=${selectedUserId}`),
-        fetch(`${API_URL}/api/wellbeing?user_id=${selectedUserId}`),
+        apiFetch(`${API_URL}/api/meals?user_id=${selectedUserId}`),
+        apiFetch(`${API_URL}/api/symptoms?user_id=${selectedUserId}`),
+        apiFetch(`${API_URL}/api/wellbeing?user_id=${selectedUserId}`),
       ]);
+
+      if ([mealRes, symptomRes, wellbeingRes].some((response) => response.status === 401)) {
+        return;
+      }
 
       const mealsData = mealRes.ok ? await mealRes.json() : [];
       const symptomsData = symptomRes.ok ? await symptomRes.json() : [];
@@ -591,15 +625,15 @@ function App() {
         let response;
 
         if (isDelete) {
-          response = await fetch(`${baseUrl}/${item.payload.id}`, { method: 'DELETE' });
+          response = await apiFetch(`${baseUrl}/${item.payload.id}`, { method: 'DELETE' });
         } else if (isUpdate) {
-          response = await fetch(`${baseUrl}/${item.payload.id}`, {
+          response = await apiFetch(`${baseUrl}/${item.payload.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(item.payload),
           });
         } else {
-          response = await fetch(baseUrl, {
+          response = await apiFetch(baseUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(item.payload),
@@ -632,8 +666,62 @@ function App() {
   };
 
   useEffect(() => {
-    fetchUsers();
+    handleUnauthorized = () => {
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      setNeedsLogin(true);
+    };
+
+    if (readAuthToken()) {
+      fetchUsers();
+      return;
+    }
+
+    // Without APP_PASSWORD (local development) the server accepts requests without token
+    apiFetch(`${API_URL}/api/auth/check`)
+      .then((response) => {
+        if (response.ok) {
+          setNeedsLogin(false);
+          fetchUsers();
+        }
+      })
+      .catch(() => {});
   }, []);
+
+  const handleLogin = async (event) => {
+    event.preventDefault();
+    setLoginError('');
+
+    try {
+      const response = await fetch(`${API_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: loginPassword }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Anmeldung fehlgeschlagen');
+      }
+
+      const { token } = await response.json();
+      localStorage.setItem(AUTH_TOKEN_KEY, token);
+      setLoginPassword('');
+      setNeedsLogin(false);
+      setStatus('');
+      await fetchUsers();
+      await fetchData();
+      syncQueuedEntries({ silent: true });
+    } catch (error) {
+      setLoginError(isNetworkError(error)
+        ? 'Server nicht erreichbar. Die Anmeldung ist nur im Heimnetz möglich.'
+        : error.message);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    setNeedsLogin(true);
+  };
 
   useEffect(() => {
     if (route !== 'admin') return;
@@ -694,7 +782,7 @@ function App() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/users`, {
+      const response = await apiFetch(`${API_URL}/api/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: form.username }),
@@ -755,7 +843,7 @@ function App() {
 
       if (!(await isInHomeNetwork())) throw notInHomeNetworkError();
 
-      const response = await fetch(`${API_URL}/api/${type === 'meal' ? 'meals' : type === 'symptom' ? 'symptoms' : 'wellbeing'}/${entry.id}`, {
+      const response = await apiFetch(`${API_URL}/api/${type === 'meal' ? 'meals' : type === 'symptom' ? 'symptoms' : 'wellbeing'}/${entry.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -783,7 +871,7 @@ function App() {
     try {
       if (!(await isInHomeNetwork())) throw notInHomeNetworkError();
 
-      const response = await fetch(`${API_URL}/api/${type === 'meal' ? 'meals' : type === 'symptom' ? 'symptoms' : 'wellbeing'}/${entryId}`, {
+      const response = await apiFetch(`${API_URL}/api/${type === 'meal' ? 'meals' : type === 'symptom' ? 'symptoms' : 'wellbeing'}/${entryId}`, {
         method: 'DELETE',
       });
 
@@ -823,7 +911,7 @@ function App() {
     try {
       if (!(await isInHomeNetwork())) throw notInHomeNetworkError();
 
-      const response = await fetch(`${API_URL}/api/meals`, {
+      const response = await apiFetch(`${API_URL}/api/meals`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -877,7 +965,7 @@ function App() {
     try {
       if (!(await isInHomeNetwork())) throw notInHomeNetworkError();
 
-      const response = await fetch(`${API_URL}/api/symptoms`, {
+      const response = await apiFetch(`${API_URL}/api/symptoms`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -922,7 +1010,7 @@ function App() {
     try {
       if (!(await isInHomeNetwork())) throw notInHomeNetworkError();
 
-      const response = await fetch(`${API_URL}/api/wellbeing`, {
+      const response = await apiFetch(`${API_URL}/api/wellbeing`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -979,7 +1067,7 @@ function App() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/users`, {
+      const response = await apiFetch(`${API_URL}/api/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username }),
@@ -1006,7 +1094,7 @@ function App() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/users/${userId}`, {
+      const response = await apiFetch(`${API_URL}/api/users/${userId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username }),
@@ -1032,7 +1120,7 @@ function App() {
     if (!confirmed) return;
 
     try {
-      const response = await fetch(`${API_URL}/api/users/${userId}`, {
+      const response = await apiFetch(`${API_URL}/api/users/${userId}`, {
         method: 'DELETE',
       });
 
@@ -1059,7 +1147,7 @@ function App() {
         ? `${API_URL}/api/export/csv?user_id=${selectedUserId}`
         : `${API_URL}/api/export/csv`;
       const exportUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}export_type=${encodeURIComponent(exportType)}`;
-      const response = await fetch(exportUrl);
+      const response = await apiFetch(exportUrl);
       if (!response.ok) throw new Error('Export fehlgeschlagen');
 
       const blob = await response.blob();
@@ -1085,7 +1173,7 @@ function App() {
       const exportUrl = userId
         ? `${API_URL}/api/export/csv?user_id=${userId}`
         : `${API_URL}/api/export/csv`;
-      const response = await fetch(exportUrl);
+      const response = await apiFetch(exportUrl);
       if (!response.ok) throw new Error('Admin-Export fehlgeschlagen');
 
       const blob = await response.blob();
@@ -1118,7 +1206,7 @@ function App() {
         ? `${API_URL}/api/import/csv?user_id=${userId}`
         : `${API_URL}/api/import/csv`;
 
-      const response = await fetch(importUrl, {
+      const response = await apiFetch(importUrl, {
         method: 'POST',
         body: formData,
       });
@@ -1156,7 +1244,7 @@ function App() {
         ? `${API_URL}/api/import/csv?user_id=${selectedUserId}`
         : `${API_URL}/api/import/csv`;
 
-      const response = await fetch(importUrl, {
+      const response = await apiFetch(importUrl, {
         method: 'POST',
         body: formData,
       });
@@ -1266,12 +1354,44 @@ function App() {
     }),
   };
 
+  if (needsLogin) {
+    return (
+      <div className="app-shell">
+        <header className="topbar">
+          <div className="topbar-row">
+            <h1>Ernährungstagebuch</h1>
+          </div>
+        </header>
+
+        <main className="content">
+          <section className="card">
+            <h2>Anmelden</h2>
+            <form onSubmit={handleLogin} className="stack">
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                placeholder="App-Passwort"
+                aria-label="App-Passwort"
+                autoFocus
+              />
+              <button type="submit" disabled={!loginPassword}>Anmelden</button>
+              {loginError && <p className="status">{loginError}</p>}
+            </form>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
         <div className="topbar-row">
           <h1>Ernährungstagebuch</h1>
           {activeUserName && <span className="header-user-pill">{activeUserName}</span>}
+          <button type="button" className="logout-button" onClick={handleLogout}>Abmelden</button>
         </div>
         {!window.location.pathname.startsWith('/admin') && (
           <nav className="tab-bar" aria-label="Hauptnavigation">

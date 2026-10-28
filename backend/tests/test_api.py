@@ -1,11 +1,18 @@
 import os
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
+
+# Tests drop all tables: never run them against the development database (app.db)
+os.environ['APP_ENV'] = 'test'
+os.environ['APP_PASSWORD'] = 'test-passwort'
+os.environ['TEST_DATABASE_URL'] = 'sqlite:///' + os.path.join(tempfile.gettempdir(), 'ernaehrungstagebuch-pytest.db')
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from fastapi.testclient import TestClient
 
+from app import auth
 from app.database import Base, engine
 from app.main import app
 
@@ -13,9 +20,14 @@ from app.main import app
 def setup_function():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    auth.reset_failed_logins()
 
 
+anonymous_client = TestClient(app)
 client = TestClient(app)
+client.headers['Authorization'] = 'Bearer ' + anonymous_client.post(
+    '/api/auth/login', json={'password': 'test-passwort'}
+).json()['token']
 
 
 def test_meal_creation_creates_reminders():
@@ -250,3 +262,170 @@ def test_admin_can_update_and_delete_individual_entries():
     assert client.get(f'/api/meals?user_id={user["id"]}').json() == []
     assert client.get(f'/api/symptoms?user_id={user["id"]}').json() == []
     assert client.get(f'/api/wellbeing?user_id={user["id"]}').json() == []
+
+
+def create_user(username='tester'):
+    response = client.post('/api/users', json={'username': username})
+    assert response.status_code == 201, response.text
+    return response.json()['id']
+
+
+def test_tests_do_not_use_development_database():
+    assert 'ernaehrungstagebuch-pytest.db' in str(engine.url)
+
+
+def test_api_responses_have_security_headers():
+    response = client.get('/api/users')
+    assert response.headers['X-Content-Type-Options'] == 'nosniff'
+    assert response.headers['X-Frame-Options'] == 'DENY'
+    assert response.headers['Cache-Control'] == 'no-store'
+
+
+def test_username_is_stripped_and_duplicates_with_whitespace_are_rejected():
+    first = client.post('/api/users', json={'username': '  anna  '})
+    assert first.status_code == 201, first.text
+    assert first.json()['username'] == 'anna'
+
+    duplicate = client.post('/api/users', json={'username': 'anna '})
+    assert duplicate.status_code == 400
+
+    blank = client.post('/api/users', json={'username': '    '})
+    assert blank.status_code == 422
+
+
+def test_overlong_input_is_rejected():
+    user_id = create_user()
+    response = client.post('/api/symptoms', json={
+        'user_id': user_id,
+        'type': 'x' * 51,
+        'value': 3,
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+    })
+    assert response.status_code == 422
+
+    response = client.post('/api/meals', json={
+        'user_id': user_id,
+        'name': 'Suppe',
+        'eaten_at': datetime.now(timezone.utc).isoformat(),
+        'notes': 'x' * 2001,
+    })
+    assert response.status_code == 422
+
+
+def test_symptom_cannot_reference_meal_of_other_user():
+    owner_id = create_user('owner')
+    other_id = create_user('other')
+    meal = client.post('/api/meals', json={
+        'user_id': owner_id,
+        'name': 'Suppe',
+        'eaten_at': datetime.now(timezone.utc).isoformat(),
+    })
+    assert meal.status_code == 201, meal.text
+
+    response = client.post('/api/symptoms', json={
+        'user_id': other_id,
+        'meal_id': meal.json()['id'],
+        'type': 'bauchweh',
+        'value': 2,
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+    })
+    assert response.status_code == 400
+
+
+def test_export_neutralises_spreadsheet_formulas_and_import_restores_them():
+    user_id = create_user()
+    client.post('/api/meals', json={
+        'user_id': user_id,
+        'name': '=HYPERLINK("http://example.com","klick")',
+        'eaten_at': datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc).isoformat(),
+        'notes': '- wenig Salz',
+    })
+
+    export = client.get(f'/api/export/csv?user_id={user_id}')
+    assert export.status_code == 200
+    assert '\'=HYPERLINK' in export.text
+    assert ',=HYPERLINK' not in export.text
+
+    client.delete(f"/api/meals/{client.get(f'/api/meals?user_id={user_id}').json()[0]['id']}")
+    imported = client.post(
+        f'/api/import/csv?user_id={user_id}',
+        files={'file': ('export.csv', export.content, 'text/csv')},
+    )
+    assert imported.status_code == 200, imported.text
+    meals = client.get(f'/api/meals?user_id={user_id}').json()
+    assert meals[0]['name'] == '=HYPERLINK("http://example.com","klick")'
+    assert meals[0]['notes'] == '- wenig Salz'
+
+
+def import_rows(user_id, rows):
+    header = 'entry_type,timestamp_utc,sub_category,name,value,notes\n'
+    content = header + '\n'.join(rows) + '\n'
+    return client.post(
+        f'/api/import/csv?user_id={user_id}',
+        files={'file': ('import.csv', content.encode('utf-8'), 'text/csv')},
+    )
+
+
+def test_import_rejects_invalid_rows_without_partial_import():
+    user_id = create_user()
+    response = import_rows(user_id, [
+        'meal,2026-10-25T12:00:00+00:00,meal,Suppe,,',
+        'symptom,2026-10-25T13:00:00+00:00,bauchweh,bauchweh,99,',
+    ])
+    assert response.status_code == 400
+    assert 'Zeile 3' in response.json()['detail']
+    assert client.get(f'/api/meals?user_id={user_id}').json() == []
+
+    response = import_rows(user_id, ['wellbeing,kein-datum,overall,overall_wellbeing,2,'])
+    assert response.status_code == 400
+
+
+def test_import_rejects_unknown_user_and_oversized_file():
+    response = client.post(
+        '/api/import/csv?user_id=999',
+        files={'file': ('import.csv', b'entry_type\n', 'text/csv')},
+    )
+    assert response.status_code == 404
+
+    user_id = create_user()
+    response = client.post(
+        f'/api/import/csv?user_id={user_id}',
+        files={'file': ('import.csv', b'x' * (5 * 1024 * 1024 + 1), 'text/csv')},
+    )
+    assert response.status_code == 413
+
+
+def test_api_requires_login():
+    for method, path in [
+        ('get', '/api/users'),
+        ('get', '/api/meals'),
+        ('get', '/api/export/csv'),
+        ('delete', '/api/users/1'),
+        ('post', '/api/meals'),
+    ]:
+        response = getattr(anonymous_client, method)(path)
+        assert response.status_code == 401, (method, path)
+
+    assert anonymous_client.get('/health').status_code == 200
+
+
+def test_login_with_wrong_password_and_forged_tokens_fail():
+    assert anonymous_client.post('/api/auth/login', json={'password': 'falsch'}).status_code == 401
+
+    for token in ['', '9999999999', '9999999999.abc', 'abc.def', auth.create_token(now=0)]:
+        response = anonymous_client.get('/api/users', headers={'Authorization': f'Bearer {token}'})
+        assert response.status_code == 401, token
+
+
+def test_login_is_blocked_after_too_many_failures():
+    for _ in range(auth.MAX_FAILED_LOGINS):
+        assert anonymous_client.post('/api/auth/login', json={'password': 'falsch'}).status_code == 401
+
+    blocked = anonymous_client.post('/api/auth/login', json={'password': 'test-passwort'})
+    assert blocked.status_code == 429
+
+
+def test_valid_login_grants_access():
+    token = anonymous_client.post('/api/auth/login', json={'password': 'test-passwort'}).json()['token']
+    response = anonymous_client.get('/api/auth/check', headers={'Authorization': f'Bearer {token}'})
+    assert response.status_code == 200

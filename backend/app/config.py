@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./app.db"
     test_database_url: str | None = None
     production_database_url: str | None = None
+    # Shared app password; empty disables the login (only allowed outside production)
+    app_password: str | None = None
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost,http://wiegehts.x73.eu,https://wiegehts.x73.eu,https://www.wiegehts.x73.eu"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

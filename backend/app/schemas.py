@@ -1,16 +1,29 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class UserCreate(BaseModel):
+class InputModel(BaseModel):
+    # Strip surrounding whitespace; unknown fields (e.g. "id" from queued offline updates) are ignored
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+
+class LoginIn(BaseModel):
+    password: str = Field(..., min_length=1, max_length=200)
+
+
+class LoginOut(BaseModel):
+    token: str
+
+
+class UserCreate(InputModel):
     username: str = Field(..., min_length=2, max_length=100)
 
 
-class UserUpdate(BaseModel):
+class UserUpdate(InputModel):
     username: str = Field(..., min_length=2, max_length=100)
-    display_name: Optional[str] = None
+    display_name: Optional[str] = Field(default=None, max_length=100)
 
 
 class UserOut(BaseModel):
@@ -20,18 +33,18 @@ class UserOut(BaseModel):
     created_at: datetime
 
 
-class MealCreate(BaseModel):
+class MealCreate(InputModel):
     user_id: Optional[int] = None
     name: str = Field(..., min_length=1, max_length=255)
     eaten_at: datetime
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(default=None, max_length=2000)
 
 
-class MealUpdate(BaseModel):
+class MealUpdate(InputModel):
     user_id: Optional[int] = None
     name: str = Field(..., min_length=1, max_length=255)
     eaten_at: datetime
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(default=None, max_length=2000)
 
 
 class MealOut(BaseModel):
@@ -44,18 +57,18 @@ class MealOut(BaseModel):
     updated_at: datetime
 
 
-class SymptomCreate(BaseModel):
+class SymptomCreate(InputModel):
     user_id: Optional[int] = None
     meal_id: Optional[int] = None
-    type: str
+    type: str = Field(..., min_length=1, max_length=50)
     value: int = Field(..., ge=1, le=5)
     timestamp: datetime
 
 
-class SymptomUpdate(BaseModel):
+class SymptomUpdate(InputModel):
     user_id: Optional[int] = None
     meal_id: Optional[int] = None
-    type: str
+    type: str = Field(..., min_length=1, max_length=50)
     value: int = Field(..., ge=1, le=5)
     timestamp: datetime
 
@@ -71,13 +84,13 @@ class SymptomOut(BaseModel):
     updated_at: datetime
 
 
-class WellbeingCreate(BaseModel):
+class WellbeingCreate(InputModel):
     user_id: Optional[int] = None
     value: int = Field(..., ge=1, le=3)
     timestamp: datetime
 
 
-class WellbeingUpdate(BaseModel):
+class WellbeingUpdate(InputModel):
     user_id: Optional[int] = None
     value: int = Field(..., ge=1, le=3)
     timestamp: datetime

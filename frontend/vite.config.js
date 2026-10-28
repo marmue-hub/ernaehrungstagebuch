@@ -1,9 +1,46 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const allowedHosts = ['wiegehts.x73.eu', 'www.wiegehts.x73.eu'];
+
+const originOf = (value) => {
+  try {
+    return value ? new URL(value).origin : null;
+  } catch {
+    return null;
+  }
+};
+
+// API and home-network check may live on another origin (e.g. local test setup)
+const connectSources = [
+  "'self'",
+  originOf(process.env.VITE_API_URL),
+  originOf(process.env.VITE_HOME_CHECK_URL),
+].filter(Boolean);
+
+const securityHeaders = {
+  'Content-Security-Policy': [
+    "default-src 'self'",
+    "script-src 'self'",
+    // React style={{...}} attributes need inline styles
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    `connect-src ${[...new Set(connectSources)].join(' ')}`,
+    "manifest-src 'self'",
+    "worker-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join('; '),
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+};
 const publicFiles = ['manifest.webmanifest', 'ernaehrungstagebuch-icon.svg'];
 
 // Emits sw.js with the complete list of build files, so the app works fully offline.
@@ -26,8 +63,26 @@ const serviceWorkerPlugin = () => ({
   },
 });
 
+// The preview server answers unknown paths with index.html (SPA fallback). For build files that
+// would hand HTML to the browser as JavaScript, so missing assets get a real 404.
+const missingAssetsNotFoundPlugin = () => ({
+  name: 'missing-assets-not-found',
+  configurePreviewServer(server) {
+    const outDir = resolve(server.config.root, server.config.build.outDir);
+    server.middlewares.use((req, res, next) => {
+      const path = (req.url || '').split('?')[0];
+      if (path.startsWith('/assets/') && !existsSync(resolve(outDir, `.${decodeURIComponent(path)}`))) {
+        res.statusCode = 404;
+        res.end('Not found');
+        return;
+      }
+      next();
+    });
+  },
+});
+
 export default defineConfig({
-  plugins: [react(), serviceWorkerPlugin()],
+  plugins: [react(), serviceWorkerPlugin(), missingAssetsNotFoundPlugin()],
   server: {
     host: '0.0.0.0',
     port: 5173,
@@ -43,5 +98,6 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 4173,
     allowedHosts,
+    headers: securityHeaders,
   },
 });

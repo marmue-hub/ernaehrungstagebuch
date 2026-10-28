@@ -6,8 +6,16 @@ const HOME_CHECK_PARAM = '__home_check';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))
   );
+});
+
+// No automatic skipWaiting: an open page keeps its consistent old version (index.html + assets).
+// main.jsx activates a waiting version when the app is started.
+self.addEventListener('message', (event) => {
+  if (event.data === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', (event) => {
@@ -37,7 +45,9 @@ self.addEventListener('fetch', (event) => {
   // App shell is served from the precache; a new deployment arrives as a new service worker version.
   if (request.mode === 'navigate') {
     event.respondWith(
-      caches.match('/index.html').then((cachedResponse) => cachedResponse || fetch(request))
+      caches.open(CACHE_NAME)
+        .then((cache) => cache.match('/index.html'))
+        .then((cachedResponse) => cachedResponse || fetch(request))
     );
     return;
   }
@@ -49,7 +59,9 @@ self.addEventListener('fetch', (event) => {
       }
 
       return fetch(request).then((networkResponse) => {
-        if (networkResponse.ok) {
+        // Never cache an HTML fallback page under the URL of a script, stylesheet or image
+        const contentType = networkResponse.headers.get('Content-Type') || '';
+        if (networkResponse.ok && !contentType.includes('text/html')) {
           const responseClone = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
         }
