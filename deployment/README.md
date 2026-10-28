@@ -1,64 +1,31 @@
 # Deployment
 
-Dieses Verzeichnis enthält das Deployment-Skript und die Regeln, damit der Server nie wieder mit veraltetem Code deployt.
+- `deploy.sh`: spielt den aktuellen Stand von `origin/main` per SSH auf dem Server ein.
+- `admin-anleitung.md`: Einrichtung, manuelles Update, Checks und Fehlersuche für den Admin.
+
+## Aufruf
+
+```bash
+./deployment/deploy.sh <user@host> [remote-dir]
+./deployment/deploy.sh admin@wiegehts.x73.eu /opt/ernaehrungstagebuch
+```
+
+Ziel und Verzeichnis können auch über `PROD_SSH_TARGET` und `PROD_REMOTE_DIR` gesetzt werden. Standard für das Verzeichnis ist `/opt/ernaehrungstagebuch`.
+
+Voraussetzung: SSH-Zugang zum Server per Schlüssel. Der Server-Benutzer braucht Rechte für `git` im Projektverzeichnis und für `docker compose`.
+
+## Was das Skript prüft
+
+Das Skript bricht ab, statt einen veralteten oder veränderten Stand zu deployen, wenn auf dem Server:
+
+- das Verzeichnis fehlt oder kein Git-Repository ist,
+- ein anderer Branch als `main` ausgecheckt ist,
+- versionierte Dateien lokal geändert wurden,
+- `.env` mit `APP_PASSWORD` fehlt,
+- `origin/main` nicht per Fast-Forward übernommen werden kann, z. B. wegen eines eigenen Commits auf dem Server.
+
+Erst danach führt es `docker compose up --build -d` aus und zeigt den Status. Für die Checks nach dem Deploy siehe [admin-anleitung.md](admin-anleitung.md#checks-nach-dem-start).
 
 ## Grundregel
 
-Vor jedem Deploy und vor jeder größeren Änderung gilt:
-
-- immer zuerst auf main wechseln
-- immer zuerst den aktuellen Stand von origin laden
-- niemals auf einem lokalen, veralteten Checkout weiterarbeiten
-- niemals uncommittete Änderungen in das Produktiv-Repo deployen
-
-## Ablauf
-
-Auf dem Server im Zielverzeichnis:
-
-```bash
-cd /opt/ernaehrungstagebuch
-git fetch --all --prune
-git checkout main
-git diff --quiet && git diff --cached --quiet
-git pull --ff-only origin main
-docker compose up --build -d
-docker compose ps
-```
-
-## Skript
-
-```bash
-chmod +x deploy.sh
-./deploy.sh deploy@wiegehts.x73.eu /opt/ernaehrungstagebuch
-```
-
-Das Skript prüft jetzt explizit:
-
-- ob das Repository auf main steht
-- ob der Arbeitsbaum sauber ist
-- ob der aktuelle Stand aus origin geladen wird
-- ob ein Fast-Forward-Update möglich ist
-
-Falls ein Zustand nicht sauber ist, bricht das Deployment ab, statt mit veralteter Software weiterzumachen.
-
-## Warum das wichtig ist
-
-Wenn der Admin eine ältere Version deployt, liegt das typischerweise daran, dass:
-
-- ein anderer Branch aktiv ist
-- ein veraltetes Repo verwendet wird
-- das Produktiv-Verzeichnis nicht sauber ist
-- ein alter Docker-Stack weiterläuft
-
-## Verifikation
-
-Nach dem Deploy sollte der Admin prüfen:
-
-```bash
-git -C /opt/ernaehrungstagebuch log -1 --oneline
-git -C /opt/ernaehrungstagebuch status --short --branch
-docker compose ps
-docker compose logs --tail=100 backend frontend
-```
-
-Damit kann man sicherstellen, dass nicht nur das aktuelle Git-Projekt auf dem Server liegt, sondern auch wirklich der richtige Branch und der aktuelle Commit läuft.
+Auf dem Server wird nicht entwickelt. Änderungen kommen nur über `main` im GitHub-Repository dorthin.
