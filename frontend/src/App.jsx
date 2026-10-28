@@ -12,9 +12,9 @@ const API_URL = import.meta.env.VITE_API_URL || (
     : 'http://localhost:8000'
 );
 
-// Only reachable from the home network: synchronisation happens exclusively there.
+// Resolves to a private IP (192.168.111.10), i.e. only reachable from the home network: sync happens exclusively there.
 const HOME_CHECK_URL = import.meta.env.VITE_HOME_CHECK_URL ?? (
-  APP_ENV === 'production' ? 'https://www.wiegehts.x73.eu/' : ''
+  APP_ENV === 'production' ? 'https://wiegehts.x73.eu/' : ''
 );
 const HOME_CHECK_TIMEOUT_MS = 4000;
 const HOME_CHECK_CACHE_MS = 30000;
