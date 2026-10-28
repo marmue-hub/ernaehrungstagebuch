@@ -1,0 +1,60 @@
+<svg width="1200" height="900" viewBox="0 0 1200 900" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f4efe8"/>
+      <stop offset="100%" stop-color="#e8f3ee"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8fd3b0"/>
+      <stop offset="100%" stop-color="#4fa77f"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#7a8d7c" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="900" fill="url(#bg1)"/>
+
+  <rect x="60" y="70" width="1080" height="760" rx="32" fill="#f9f7f3" filter="url(#shadow)"/>
+
+  <text x="120" y="155" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#2f3b2f">Gefühle</text>
+  <text x="120" y="198" font-family="Arial, sans-serif" font-size="48" font-weight="700" fill="#1d2a1d">Wie geht es dir heute?</text>
+
+  <g>
+    <rect x="120" y="240" width="300" height="360" rx="28" fill="#ffffff" stroke="#dfe8df" stroke-width="2"/>
+    <circle cx="270" cy="330" r="73" fill="#f7e49a"/>
+    <ellipse cx="252" cy="318" rx="9" ry="10" fill="#2d2d2d"/>
+    <ellipse cx="288" cy="318" rx="9" ry="10" fill="#2d2d2d"/>
+    <path d="M250 350 Q270 369 290 350" fill="none" stroke="#2d2d2d" stroke-width="5" stroke-linecap="round"/>
+    <text x="270" y="445" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" font-weight="700" fill="#1d2a1d">super</text>
+    <text x="270" y="488" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="#5d6b5d">mir geht es super!</text>
+  </g>
+
+  <g>
+    <rect x="450" y="240" width="300" height="360" rx="28" fill="url(#green)" stroke="#6bbd93" stroke-width="2"/>
+    <circle cx="600" cy="330" r="73" fill="#f6f2d3"/>
+    <ellipse cx="582" cy="318" rx="9" ry="10" fill="#1d2a1d"/>
+    <ellipse cx="618" cy="318" rx="9" ry="10" fill="#1d2a1d"/>
+    <path d="M582 350 Q600 366 618 350" fill="none" stroke="#1d2a1d" stroke-width="5" stroke-linecap="round"/>
+    <text x="600" y="445" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" font-weight="700" fill="#ffffff">gut</text>
+    <text x="600" y="488" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="#eef9f3">mir geht es gut</text>
+  </g>
+
+  <g>
+    <rect x="780" y="240" width="300" height="360" rx="28" fill="#ffffff" stroke="#dfe8df" stroke-width="2"/>
+    <circle cx="930" cy="330" r="73" fill="#f8c9b6"/>
+    <ellipse cx="912" cy="318" rx="9" ry="10" fill="#2d2d2d"/>
+    <ellipse cx="948" cy="318" rx="9" ry="10" fill="#2d2d2d"/>
+    <path d="M912 358 Q930 334 948 358" fill="none" stroke="#2d2d2d" stroke-width="5" stroke-linecap="round"/>
+    <text x="930" y="445" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" font-weight="700" fill="#1d2a1d">schlecht</text>
+    <text x="930" y="488" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="#5d6b5d">mir geht es richtig schlecht</text>
+  </g>
+
+  <rect x="120" y="640" width="960" height="120" rx="22" fill="#ffffff" stroke="#dfe8df" stroke-width="2"/>
+  <text x="155" y="691" font-family="Arial, sans-serif" font-size="22" fill="#5d6b5d">Zeitpunkt</text>
+  <rect x="330" y="666" width="310" height="54" rx="14" fill="#f4f7f4"/>
+  <text x="360" y="700" font-family="Arial, sans-serif" font-size="26" fill="#1d2a1d">25.10.2026 13:45</text>
+
+  <rect x="810" y="666" width="230" height="54" rx="14" fill="#4fa77f"/>
+  <text x="925" y="700" text-anchor="middle" font-family="Arial, sans-serif" font-size="26" font-weight="700" fill="#ffffff">Speichern</text>
+</svg>
