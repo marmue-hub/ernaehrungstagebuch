@@ -425,6 +425,13 @@ def test_login_is_blocked_after_too_many_failures():
     assert blocked.status_code == 429
 
 
+def test_default_password_applies_without_app_password(monkeypatch):
+    from app.config import DEFAULT_APP_PASSWORD, Settings
+
+    monkeypatch.delenv('APP_PASSWORD', raising=False)
+    assert Settings(_env_file=None).app_password == DEFAULT_APP_PASSWORD == 'wiegehts'
+
+
 def test_valid_login_grants_access():
     token = anonymous_client.post('/api/auth/login', json={'password': 'test-passwort'}).json()['token']
     response = anonymous_client.get('/api/auth/check', headers={'Authorization': f'Bearer {token}'})

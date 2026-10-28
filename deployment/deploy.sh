@@ -31,8 +31,9 @@ if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   fail "Lokale Änderungen auf dem Server"
 fi
 
-grep -q '^APP_PASSWORD=.' .env 2>/dev/null \
-  || fail ".env mit APP_PASSWORD fehlt (siehe deployment/admin-anleitung.md)"
+if ! grep -q '^APP_PASSWORD=.' .env 2>/dev/null; then
+  echo "HINWEIS: kein eigenes APP_PASSWORD in .env, das Standardpasswort ist aktiv." >&2
+fi
 
 git fetch --prune origin
 git merge --ff-only origin/main || fail "Kein Fast-Forward auf origin/main möglich"

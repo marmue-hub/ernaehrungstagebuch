@@ -1,5 +1,6 @@
 import csv
 import io
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import List
 
@@ -7,7 +8,7 @@ from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, Req
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-from app.config import settings
+from app.config import DEFAULT_APP_PASSWORD, settings
 from app.database import SessionLocal, engine
 from app import auth, models, schemas
 from app.database import Base
@@ -22,7 +23,12 @@ CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 is_production = settings.app_env.lower() == "production"
 
 if is_production and not auth.auth_enabled():
-    raise RuntimeError("APP_PASSWORD muss in Produktion gesetzt sein")
+    raise RuntimeError("APP_PASSWORD darf in Produktion nicht leer sein")
+
+if settings.app_password == DEFAULT_APP_PASSWORD:
+    logging.getLogger("uvicorn.error").warning(
+        "Standard-App-Passwort aktiv. Für mehr Sicherheit APP_PASSWORD in .env setzen."
+    )
 
 # No interactive API docs in production
 app = FastAPI(

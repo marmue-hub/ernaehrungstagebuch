@@ -21,8 +21,9 @@ Das Skript bricht ab, statt einen veralteten oder veränderten Stand zu deployen
 - das Verzeichnis fehlt oder kein Git-Repository ist,
 - ein anderer Branch als `main` ausgecheckt ist,
 - versionierte Dateien lokal geändert wurden,
-- `.env` mit `APP_PASSWORD` fehlt,
 - `origin/main` nicht per Fast-Forward übernommen werden kann, z. B. wegen eines eigenen Commits auf dem Server.
+
+Fehlt in `.env` ein eigenes `APP_PASSWORD`, gibt es nur einen Hinweis aus, denn dann gilt das Standardpasswort.
 
 Erst danach führt es `docker compose up --build -d` aus und zeigt den Status. Für die Checks nach dem Deploy siehe [admin-anleitung.md](admin-anleitung.md#checks-nach-dem-start).
 

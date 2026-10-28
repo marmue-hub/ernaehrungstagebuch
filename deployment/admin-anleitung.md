@@ -31,7 +31,7 @@ die App „Ernährungstagebuch“ läuft im Heimnetz als PWA, vor allem auf dem 
    cd /opt/ernaehrungstagebuch
    ```
 
-2. App-Passwort hinterlegen. Ohne diese Datei startet `docker compose` nicht, sondern bricht mit „APP_PASSWORD fehlt“ ab. Das Passwort bekommst du getrennt, nicht per Mail oder Chat.
+2. Eigenes App-Passwort hinterlegen (empfohlen). Ohne diese Datei gilt das Standardpasswort `wiegehts`. Es steht im öffentlichen Repository und ist damit für jeden lesbar. Das eigene Passwort bekommst du getrennt, nicht per Mail oder Chat.
 
    ```bash
    read -rs -p 'App-Passwort: ' P && printf 'APP_PASSWORD=%s\n' "$P" > .env && chmod 600 .env && unset P
@@ -63,7 +63,7 @@ docker compose ps
 
 Zeigt `git status` einen anderen Branch oder geänderte Dateien, bitte nicht deployen, sondern Rücksprache halten.
 
-Dasselbe erledigt per SSH das Skript `deployment/deploy.sh <user@host> /opt/ernaehrungstagebuch`. Es bricht in diesen Fällen von selbst ab und prüft zusätzlich, ob die `.env` vorhanden ist.
+Dasselbe erledigt per SSH das Skript `deployment/deploy.sh <user@host> /opt/ernaehrungstagebuch`. Es bricht in diesen Fällen von selbst ab und weist darauf hin, wenn kein eigenes Passwort in `.env` steht.
 
 Vor größeren Updates bitte die Datenbank sichern:
 
@@ -85,7 +85,7 @@ Danach die App im Browser öffnen. Es sollte die Anmeldeseite erscheinen.
 ## Fehlersuche
 
 - **Logs:** `docker compose logs --tail=100 backend frontend`
-- **„APP_PASSWORD fehlt“:** Die `.env` fehlt oder liegt im falschen Verzeichnis, siehe Einrichtung, Schritt 2.
+- **Anmeldung klappt nur mit `wiegehts`:** Die `.env` fehlt oder liegt im falschen Verzeichnis, siehe Einrichtung, Schritt 2. Im Backend-Log steht dann „Standard-App-Passwort aktiv“.
 - **Backend meldet „Permission denied“:** Der Backend-Container läuft nicht als root, sondern als UID 10001. Weil `./backend` als Volume eingebunden ist, müssen die Dateien dort für alle lesbar sein. Bei einem normalen `git clone` ist das so, bei einer strengen umask (z. B. 027) nicht. Abhilfe: `chmod -R o+rX backend`.
 - **Seite bleibt kurz nach dem Start leer:** Das Frontend baut noch. Bitte etwa eine Minute warten.
 

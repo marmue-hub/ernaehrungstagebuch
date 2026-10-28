@@ -21,8 +21,9 @@ services:
       - ./backend/.env.example
     environment:
       APP_ENV: production
-      # Set in .env next to this file (not in git): APP_PASSWORD=...
-      APP_PASSWORD: ${APP_PASSWORD:?APP_PASSWORD fehlt - bitte in .env neben docker-compose.yml setzen}
+      # Own password in .env next to this file (not in git): APP_PASSWORD=...
+      # Without it the default password from backend/app/config.py applies.
+      APP_PASSWORD: ${APP_PASSWORD:-wiegehts}
       DATABASE_URL: postgresql+psycopg://app:secret@postgres:5432/ernahrungstagebuch
       PRODUCTION_DATABASE_URL: postgresql+psycopg://app:secret@postgres:5432/ernahrungstagebuch
       APP_NAME: Ernährungstagebuch
